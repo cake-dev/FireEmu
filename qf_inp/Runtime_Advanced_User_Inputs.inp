@@ -1,0 +1,2 @@
+8  ! max number of cpu
+1  ! adaptive window, 0=off, 1=on

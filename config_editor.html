@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS-Fire Visualizer & Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Import Map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            color: white;
+            font-family: sans-serif;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        .panel {
+            background: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(4px);
+            border: 1px solid #333;
+        }
+
+        input[type=range] {
+            width: 100%;
+            accent-color: #4ade80;
+            cursor: pointer;
+        }
+
+        #playback-slider {
+            accent-color: #f97316;
+        }
+
+        /* Checkbox styling */
+        input[type=checkbox] {
+            accent-color: #4ade80;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        select {
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 12px;
+            width: 100%;
+        }
+
+        .btn {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn.active {
+            ring: 2px solid white;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #111;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- UI Overlay: Sidebar -->
+    <div class="absolute top-0 left-0 w-80 h-full panel p-4 flex flex-col gap-4 z-20 overflow-y-auto">
+        <div class="flex justify-between items-center border-b border-gray-700 pb-2">
+            <h1 class="text-xl font-bold text-green-400">JS-Fire</h1>
+            <span id="mode-badge"
+                class="text-[10px] bg-gray-700 px-2 py-1 rounded uppercase font-bold tracking-wider">Editor Mode</span>
+        </div>
+
+        <!-- Mode Switcher -->
+        <div class="flex bg-gray-800 p-1 rounded border border-gray-700">
+            <button id="tab-editor"
+                class="flex-1 py-1 text-xs font-bold rounded bg-green-600 text-white transition-colors">Editor</button>
+            <button id="tab-playback"
+                class="flex-1 py-1 text-xs font-bold rounded text-gray-400 hover:text-white transition-colors">Playback</button>
+        </div>
+
+        <!-- Global View Settings (Always Visible) -->
+        <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+            <label
+                class="flex items-center justify-between text-xs font-bold text-gray-300 cursor-pointer hover:text-white">
+                <span>Show Layer Grid</span>
+                <input type="checkbox" id="chk-grid" checked>
+            </label>
+        </div>
+
+        <!-- EDITOR CONTROLS -->
+        <div id="editor-controls" class="space-y-4 animate-fade">
+
+            <div class="bg-gray-800/50 p-3 rounded border border-gray-700 mb-4">
+                <h2 class="font-bold text-purple-400 text-sm mb-2">Map Dimensions</h2>
+                <div class="flex gap-2 mb-2">
+                    <div class="flex-1">
+                        <label class="text-[10px] text-gray-400 block mb-1">Width (X)</label>
+                        <input type="number" id="inp-grid-x"
+                            class="w-full bg-gray-900 text-white text-xs p-1.5 border border-gray-600 rounded focus:border-purple-500 outline-none"
+                            value="100" min="10" max="500">
+                    </div>
+                    <div class="flex-1">
+                        <label class="text-[10px] text-gray-400 block mb-1">Length (Y)</label>
+                        <input type="number" id="inp-grid-y"
+                            class="w-full bg-gray-900 text-white text-xs p-1.5 border border-gray-600 rounded focus:border-purple-500 outline-none"
+                            value="100" min="10" max="500">
+                    </div>
+                </div>
+                <button id="btn-resize"
+                    class="btn bg-purple-800 hover:bg-purple-700 text-white w-full py-1.5 rounded text-xs font-bold border border-purple-600 transition-colors shadow-lg">
+                    Update Grid Size
+                </button>
+                <p class="text-[10px] text-gray-500 mt-1 italic">Note: Shrinking will crop data.</p>
+            </div>
+
+            <!-- Tools -->
+            <div class="space-y-2">
+                <h2 class="font-bold text-gray-300 text-sm">Tools</h2>
+                <div class="grid grid-cols-3 gap-2">
+                    <button id="btn-brush"
+                        class="btn bg-blue-600 text-white py-2 rounded text-xs font-bold shadow-lg shadow-blue-900/20">Paint</button>
+                    <button id="btn-tree"
+                        class="btn bg-emerald-600 text-white py-2 rounded text-xs font-bold shadow-lg shadow-emerald-900/20">Tree</button>
+                    <button id="btn-terrain"
+                        class="btn bg-stone-600 text-white py-2 rounded text-xs font-bold border border-stone-500">Terrain</button>
+                    <button id="btn-eraser"
+                        class="btn bg-gray-600 text-white py-2 rounded text-xs font-bold border border-gray-500">Erase</button>
+                </div>
+
+                <button id="btn-ignite"
+                    class="btn bg-gray-800 text-white w-full py-2 rounded text-sm font-bold border border-orange-500 hover:bg-orange-900/30 transition-colors mt-2">🔥
+                    Ignition Tool</button>
+
+                <div class="bg-gray-800 p-3 rounded text-xs text-gray-300 mt-2 border border-gray-600">
+                    <p class="mb-1"><strong class="text-white">Controls:</strong></p>
+                    <ul class="list-disc pl-4 space-y-1">
+                        <li><strong>Left Click:</strong> Place/Paint</li>
+                        <li><strong>Shift + Drag:</strong> Rotate Camera</li>
+                    </ul>
+                    <hr class="border-gray-600 my-2">
+                    <p><strong>Tool:</strong> <span id="tool-status" class="text-green-400">Fuel Brush</span></p>
+                    <p><strong>Pos:</strong> <span id="hover-status">-</span></p>
+                </div>
+            </div>
+
+            <hr class="border-gray-700">
+
+            <!-- Tree Builder Panel (Only visible when Tree Tool is active) -->
+            <div id="tree-builder-panel"
+                class="hidden space-y-2 bg-gray-800/50 p-2 rounded border border-emerald-800/50">
+                <h2 class="font-bold text-emerald-400 text-sm">Tree Builder</h2>
+
+                <div>
+                    <label class="text-xs text-gray-400">Shape</label>
+                    <select id="tree-shape">
+                        <option value="round">Round / Globe</option>
+                        <option value="oval">Oval</option>
+                        <option value="columnar">Columnar</option>
+                        <option value="pyramidal">Pyramidal (Pine)</option>
+                        <option value="vase">Vase-Like</option>
+                        <option value="umbrella">Umbrella-Shaped</option>
+                        <option value="weeping">Weeping</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Height (Cells)</span> <span id="val-tree-h">8</span>
+                    </label>
+                    <input type="range" id="inp-tree-h" min="2" max="20" step="1" value="8">
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Max Radius (Cells)</span> <span id="val-tree-r">3</span>
+                    </label>
+                    <input type="range" id="inp-tree-r" min="1" max="10" step="1" value="3">
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Crown Ratio</span> <span id="val-tree-cr">0.7</span>
+                    </label>
+                    <input type="range" id="inp-tree-cr" min="0.1" max="1.0" step="0.1" value="0.7">
+                </div>
+            </div>
+
+            <div id="terrain-panel" class="hidden space-y-2 bg-gray-800/50 p-2 rounded border border-stone-600">
+                <h2 class="font-bold text-stone-400 text-sm">Terrain Editor</h2>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Elevation (m)</span> <span id="val-terrain-h">0</span>
+                    </label>
+                    <input type="range" id="inp-terrain-h" min="0" max="20" step="1" value="0">
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Brush Size</span> <span id="val-terrain-r">1</span>
+                    </label>
+                    <input type="range" id="inp-terrain-r" min="1" max="8" step="1" value="1">
+                </div>
+
+                <p class="text-[10px] text-gray-500">Click to paint elevation.</p>
+
+                <hr class="border-gray-600 my-2">
+
+                <h3 class="font-bold text-gray-400 text-xs mb-1">Procedural Gen</h3>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Roughness (Scale)</span> <span id="val-gen-scale">30</span>
+                    </label>
+                    <input type="range" id="inp-gen-scale" min="10" max="100" step="1" value="30">
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Max Height</span> <span id="val-gen-max">15</span>
+                    </label>
+                    <input type="range" id="inp-gen-max" min="5" max="30" step="1" value="15">
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 mt-2">
+                    <button id="btn-gen-terrain"
+                        class="btn bg-orange-700 text-white py-1 rounded text-xs font-bold shadow-lg">Generate</button>
+                    <button id="btn-clear-terrain"
+                        class="btn bg-red-900 text-white py-1 rounded text-xs font-bold border border-red-700">Clear
+                        All</button>
+                </div>
+            </div>
+            <!-- Wind Controls -->
+            <div class="space-y-2">
+                <h2 class="font-bold text-gray-300 text-sm">Wind & Atmosphere</h2>
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Speed</span> <span id="val-speed">6.0</span>
+                    </label>
+                    <input type="range" id="inp-speed" min="0" max="20" step="0.5" value="6.0">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Direction</span> <span id="val-dir">0°</span>
+                    </label>
+                    <input type="range" id="inp-dir" min="0" max="360" value="0">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Moisture</span> <span id="val-moist">0.05</span>
+                    </label>
+                    <input type="range" id="inp-moist" min="0" max="1" step="0.01" value="0.05">
+                </div>
+            </div>
+
+            <div class="pt-2">
+                <button id="btn-export"
+                    class="btn bg-green-600 w-full py-3 text-white font-bold rounded text-lg shadow-lg shadow-green-900/50 flex items-center justify-center gap-2">
+                    <span>💾</span> Export Sim Config
+                </button>
+            </div>
+        </div>
+
+        <!-- PLAYBACK CONTROLS -->
+        <div id="playback-controls" class="space-y-4 hidden">
+            <div class="bg-gray-800 p-4 rounded border border-gray-600 text-center">
+                <p class="text-sm text-gray-300 mb-3">Load <code>sim_playback.json</code> generated by your simulation
+                    script.</p>
+                <input type="file" id="file-input" accept=".json" class="hidden" />
+                <button onclick="document.getElementById('file-input').click()"
+                    class="btn bg-orange-600 w-full py-2 rounded text-white font-bold hover:bg-orange-500">
+                    📂 Load Simulation File
+                </button>
+                <div id="file-status" class="text-xs text-gray-500 mt-2 italic">No file loaded</div>
+            </div>
+
+            <div id="playback-ui" class="opacity-50 pointer-events-none transition-opacity">
+                <div class="flex justify-between text-xs text-gray-400 uppercase tracking-widest font-bold mb-1">
+                    <span>Timeline</span>
+                    <span id="step-display">Step: 0 / 0</span>
+                </div>
+
+                <input type="range" id="playback-slider" min="0" max="100" value="0"
+                    class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+
+                <div class="grid grid-cols-3 gap-2 mt-4">
+                    <button id="btn-prev"
+                        class="btn bg-gray-700 hover:bg-gray-600 rounded text-white p-2 font-bold">⏮</button>
+                    <button id="btn-play" class="btn bg-green-500 hover:bg-green-400 rounded text-white p-2 font-bold">▶
+                        Play</button>
+                    <button id="btn-next"
+                        class="btn bg-gray-700 hover:bg-gray-600 rounded text-white p-2 font-bold">⏭</button>
+                </div>
+
+                <div class="mt-4 space-y-2">
+                    <label class="text-xs text-gray-400 flex justify-between">
+                        <span>Playback Speed</span> <span id="speed-val">1x</span>
+                    </label>
+                    <input type="range" id="inp-playback-speed" min="1" max="20" value="1">
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Layer Slider (Right Side) -->
+    <div class="absolute top-4 right-4 panel p-2 rounded flex flex-col items-center h-3/4 z-10 w-16 shadow-2xl">
+        <label class="text-xs font-bold mb-2 text-gray-300">Layer <span id="val-layer">0</span></label>
+        <input type="range" id="inp-layer" min="0" max="29" value="0" orient="vertical"
+            style="writing-mode: bt-lr; -webkit-appearance: slider-vertical; width: 8px; height: 100%;">
+        <div class="text-[10px] mt-2 text-gray-500">Z-Axis</div>
+    </div>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { createNoise2D } from 'https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/+esm';
+
+        // --- Constants ---
+        const CONFIG = {
+            GRID_X: 100,
+            GRID_Y: 100,
+            GRID_Z: 30,
+            CELL_SIZE: 2,
+            CELL_HEIGHT: 1
+        };
+
+        // --- Application State ---
+        const state = {
+            mode: 'EDITOR',
+            editor: {
+                config: { windSpeed: 6.0, windDir: 0, moisture: 0.05 },
+                currentLayer: 0,
+                tool: { mode: 'fuel', value: 0.7 },
+                treeConfig: {
+                    shape: 'round',
+                    height: 8,
+                    radius: 3,
+                    crownRatio: 0.7
+                },
+                isDrawing: false,
+                fuel: [],
+                ignition: [],
+                terrainHeight: 0,
+                terrainRadius: 1,
+                terrain: [],      // New 2D array for elevation
+                lastPaintedIndex: -1
+            },
+            playback: {
+                data: null,
+                currentStep: 0,
+                totalSteps: 0,
+                isPlaying: false,
+                speedMultiplier: 1,
+                lastFrameTime: 0,
+                fuelState: [],
+                fireState: []
+            }
+        };
+
+        // --- Helper: Init Grid ---
+        function initGridData(targetFuelArray) {
+            state.editor.terrain = []; // Reset terrain
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                targetFuelArray[x] = [];
+                state.editor.terrain[x] = []; // Init terrain column
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                    targetFuelArray[x][y] = new Float32Array(CONFIG.GRID_Z).fill(0.0);
+                    targetFuelArray[x][y][0] = 0.7;
+                    state.editor.terrain[x][y] = 0.0; // Default flat ground
+                }
+            }
+        }
+
+        initGridData(state.editor.fuel);
+
+        // --- Three.js Setup ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        scene.fog = new THREE.FogExp2(0x111111, 0.0001);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 5000);
+        camera.position.set(0, -140, 100);
+        camera.up.set(0, 0, 1);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enabled = false;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(50, -50, 100);
+        scene.add(dirLight);
+
+        // --- Grid System ---
+        const geometry = new THREE.BoxGeometry(CONFIG.CELL_SIZE * 0.98, CONFIG.CELL_SIZE * 0.98, CONFIG.CELL_HEIGHT * 0.98);
+        const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0.1 });
+        let gridMesh = new THREE.InstancedMesh(geometry, material, CONFIG.GRID_X * CONFIG.GRID_Y * CONFIG.GRID_Z);
+        gridMesh.frustumCulled = false;
+        scene.add(gridMesh);
+
+        // --- Terrain System (New) ---
+        // Dark Brown/Earth color, slightly rougher
+        const terrainGeo = new THREE.BoxGeometry(CONFIG.CELL_SIZE, CONFIG.CELL_SIZE, CONFIG.CELL_HEIGHT);
+        const terrainMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9, metalness: 0.1 });
+        let terrainMesh = new THREE.InstancedMesh(terrainGeo, terrainMat, CONFIG.GRID_X * CONFIG.GRID_Y);
+        terrainMesh.frustumCulled = false; // Prevent flickering at edges
+        scene.add(terrainMesh);
+
+        const dummyTerrain = new THREE.Object3D();
+
+        // --- Visual Ground Plane (FIXED ROTATION) ---
+        const groundGeo = new THREE.PlaneGeometry(CONFIG.GRID_X * CONFIG.CELL_SIZE * 2, CONFIG.GRID_Y * CONFIG.CELL_SIZE * 2);
+        const groundMat = new THREE.MeshBasicMaterial({ color: 0x5c4033, side: THREE.DoubleSide });
+        let groundMesh = new THREE.Mesh(groundGeo, groundMat);
+        groundMesh.position.z = -CONFIG.CELL_HEIGHT / 2 - 0.1;
+        scene.add(groundMesh);
+
+        let activeGridHelper = new THREE.GridHelper(CONFIG.GRID_X * CONFIG.CELL_SIZE, CONFIG.GRID_X, 0x444444, 0x222222);
+        activeGridHelper.rotation.x = Math.PI / 2;
+        scene.add(activeGridHelper);
+
+        const planeGeo = new THREE.PlaneGeometry(CONFIG.GRID_X * CONFIG.CELL_SIZE, CONFIG.GRID_Y * CONFIG.CELL_SIZE);
+        const planeMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
+        let interactionPlane = new THREE.Mesh(planeGeo, planeMat);
+        scene.add(interactionPlane);
+
+        // --- Tool Cursors ---
+        // 1. Standard Cursor (Box)
+        const cursorGeo = new THREE.BoxGeometry(CONFIG.CELL_SIZE, CONFIG.CELL_SIZE, CONFIG.CELL_HEIGHT);
+        const cursorMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true, transparent: true, opacity: 0.8 });
+        const cursorMesh = new THREE.Mesh(cursorGeo, cursorMat);
+        cursorMesh.visible = false;
+        scene.add(cursorMesh);
+
+        // 2. Tree Ghost Cursor (InstancedMesh for previewing tree)
+        const treeGhostGeo = new THREE.BoxGeometry(CONFIG.CELL_SIZE, CONFIG.CELL_SIZE, CONFIG.CELL_HEIGHT);
+        const treeGhostMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.5 });
+        const treeGhostMesh = new THREE.InstancedMesh(treeGhostGeo, treeGhostMat, 10000);
+        treeGhostMesh.visible = false;
+        treeGhostMesh.frustumCulled = false; // PREVENT DISAPPEARING
+        scene.add(treeGhostMesh);
+
+        const windArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 20), 20, 0xffff00, 5, 3);
+        scene.add(windArrow);
+
+        const dummy = new THREE.Object3D();
+        const colorTemp = new THREE.Color();
+
+        function initMeshPositions() {
+            let idx = 0;
+            for (let z = 0; z < CONFIG.GRID_Z; z++) {
+                for (let x = 0; x < CONFIG.GRID_X; x++) {
+                    for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                        dummy.position.set(
+                            (x - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (y - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            z * CONFIG.CELL_HEIGHT
+                        );
+                        dummy.scale.set(0, 0, 0);
+                        dummy.updateMatrix();
+                        gridMesh.setMatrixAt(idx, dummy.matrix);
+                        idx++;
+                    }
+                }
+            }
+            gridMesh.instanceMatrix.needsUpdate = true;
+        }
+        initMeshPositions();
+
+        // --- TREE GENERATION LOGIC ---
+        function generateTreeVoxels() {
+            const { height, radius, crownRatio, shape } = state.editor.treeConfig;
+            const voxels = [];
+
+            const crownHeight = Math.floor(height * crownRatio);
+            const trunkHeight = height - crownHeight;
+
+            // Trunk
+            for (let z = 0; z < trunkHeight; z++) {
+                voxels.push({ x: 0, y: 0, z: z, fuel: 1.0 });
+            }
+
+            // Crown
+            for (let z = 0; z < crownHeight; z++) {
+                const absZ = z + trunkHeight;
+                const relZ = z / crownHeight;
+                let currentRadius = 0;
+
+                switch (shape) {
+                    case 'round':
+                        const normZ = (relZ - 0.5) * 2;
+                        currentRadius = radius * Math.sqrt(1 - normZ * normZ);
+                        break;
+                    case 'oval':
+                        const normZOval = (relZ - 0.5) * 2;
+                        currentRadius = radius * Math.sqrt(1 - normZOval * normZOval) * 0.8;
+                        break;
+                    case 'columnar':
+                        currentRadius = radius * 0.5;
+                        break;
+                    case 'pyramidal':
+                        currentRadius = radius * (1 - relZ);
+                        break;
+                    case 'vase':
+                        currentRadius = radius * (0.3 + (relZ * 0.7));
+                        break;
+                    case 'umbrella':
+                        currentRadius = radius * Math.sqrt(1 - (1 - relZ) * (1 - relZ));
+                        break;
+                    case 'weeping':
+                        currentRadius = radius * (1 - Math.pow(2 * relZ - 1, 2)) * (1 - relZ * 0.2);
+                        break;
+                    default:
+                        currentRadius = radius;
+                }
+
+                if (isNaN(currentRadius)) currentRadius = 1;
+
+                const rSq = currentRadius * currentRadius;
+                const scan = Math.ceil(currentRadius);
+
+                for (let dx = -scan; dx <= scan; dx++) {
+                    for (let dy = -scan; dy <= scan; dy++) {
+                        if (dx * dx + dy * dy <= rSq) {
+                            if (absZ < trunkHeight && dx === 0 && dy === 0) continue;
+                            voxels.push({ x: dx, y: dy, z: absZ, fuel: 0.7 });
+                        }
+                    }
+                }
+            }
+            return voxels;
+        }
+
+        let currentTreeVoxels = [];
+        function updateTreeGhostShape() {
+            currentTreeVoxels = generateTreeVoxels();
+            treeGhostMesh.count = currentTreeVoxels.length;
+            for (let i = 0; i < currentTreeVoxels.length; i++) {
+                const v = currentTreeVoxels[i];
+                dummy.position.set(v.x * CONFIG.CELL_SIZE, v.y * CONFIG.CELL_SIZE, v.z * CONFIG.CELL_HEIGHT);
+                dummy.rotation.set(0, 0, 0);
+                dummy.scale.set(1, 1, 1);
+                dummy.updateMatrix();
+                treeGhostMesh.setMatrixAt(i, dummy.matrix);
+            }
+            treeGhostMesh.instanceMatrix.needsUpdate = true;
+        }
+
+        updateTreeGhostShape();
+
+
+        // --- VISUALIZATION UPDATE ---
+
+        function updateEditorVisuals() {
+            const activeZ = state.editor.currentLayer;
+            const zHeight = activeZ * CONFIG.CELL_HEIGHT;
+
+            // Update Helpers
+            interactionPlane.position.z = zHeight;
+            interactionPlane.updateMatrixWorld();
+
+            // Adjust grid helper to sit on top of the terrain at the center of the map for reference,
+            // or just keep it at the active layer height:
+            activeGridHelper.position.z = (activeZ * CONFIG.CELL_HEIGHT) - (CONFIG.CELL_HEIGHT / 2);
+
+            // Update Wind Arrow
+            const rad = (state.editor.config.windDir * Math.PI) / 180;
+            windArrow.setDirection(new THREE.Vector3(Math.cos(rad), Math.sin(rad), 0));
+            windArrow.setLength(10 + state.editor.config.windSpeed);
+            windArrow.position.z = zHeight + 20;
+            windArrow.visible = true;
+
+            // --- PASS 1: UPDATE TERRAIN (Brown Underlayers) ---
+            let tIdx = 0;
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                    const h = state.editor.terrain[x]?.[y] || 0; // Height in cells
+
+                    if (h > 0) {
+                        // Scale Z to match height (h * cell_height)
+                        dummyTerrain.scale.set(1, 1, h);
+
+                        // Position Z: 
+                        // If h=1, we want it centered at 0 (occupying -0.5 to 0.5).
+                        // If h=2, we want it centered at 0.5 (occupying -0.5 to 1.5).
+                        // Formula: (h * CELL_HEIGHT / 2) - (CELL_HEIGHT / 2)
+                        const zPos = (h * CONFIG.CELL_HEIGHT / 2) - (CONFIG.CELL_HEIGHT / 2);
+
+                        dummyTerrain.position.set(
+                            (x - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (y - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            zPos
+                        );
+                        dummyTerrain.rotation.set(0, 0, 0);
+                        dummyTerrain.updateMatrix();
+                        terrainMesh.setMatrixAt(tIdx, dummyTerrain.matrix);
+                    } else {
+                        // Hide if no terrain
+                        dummyTerrain.scale.set(0, 0, 0);
+                        dummyTerrain.updateMatrix();
+                        terrainMesh.setMatrixAt(tIdx, dummyTerrain.matrix);
+                    }
+                    tIdx++;
+                }
+            }
+            terrainMesh.instanceMatrix.needsUpdate = true;
+
+            // --- PASS 2: UPDATE FUEL (Green Layers) ---
+            let idx = 0;
+            for (let z = 0; z < CONFIG.GRID_Z; z++) {
+                const isAbove = z > activeZ;
+                const isLayer = z === activeZ;
+                const isBelow = z < activeZ;
+
+                for (let x = 0; x < CONFIG.GRID_X; x++) {
+                    for (let y = 0; y < CONFIG.GRID_Y; y++) {
+
+                        const terrainOffset = (state.editor.terrain[x]?.[y] || 0) * CONFIG.CELL_HEIGHT;
+
+                        // SAFE POSITION CALCULATION
+                        // Fuel sits ON TOP of terrain. 
+                        // If terrain is h=1 (ends at 0.5), Fuel Z=0 should be at 1.0 (0 + offset).
+                        dummy.position.set(
+                            (x - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (y - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (z * CONFIG.CELL_HEIGHT) + terrainOffset
+                        );
+                        dummy.rotation.set(0, 0, 0);
+
+                        const fuelVal = state.editor.fuel[x][y][z];
+                        const isIgnited = state.editor.ignition.some(p => p.x === x && p.y === y && p.z === z);
+
+                        let visible = false;
+                        let color = null;
+
+                        if (isIgnited) {
+                            visible = true;
+                            color = 0xff4500;
+                        } else if (fuelVal > 0) {
+                            // Dynamic Green based on density
+                            colorTemp.setHSL(0.3, 0.8, 0.1 + (fuelVal * 0.4));
+                            visible = true;
+                        }
+
+                        // Layer Culling Logic
+                        if (isAbove) visible = false;
+                        // Optional: Hide empty cells on the active layer to see terrain below?
+                        // For now keep strict layer view:
+                        if (isLayer && fuelVal <= 0 && !isIgnited) visible = false;
+                        if (isBelow && !visible) visible = false;
+
+                        if (visible) {
+                            dummy.scale.set(1, 1, 1);
+                            if (color !== null) colorTemp.setHex(color);
+                            gridMesh.setColorAt(idx, colorTemp);
+                        } else {
+                            dummy.scale.set(0, 0, 0);
+                        }
+
+                        dummy.updateMatrix();
+                        gridMesh.setMatrixAt(idx, dummy.matrix);
+                        idx++;
+                    }
+                }
+            }
+            gridMesh.instanceMatrix.needsUpdate = true;
+            gridMesh.instanceColor.needsUpdate = true;
+        }
+
+        function updatePlaybackVisuals() {
+            const activeZ = state.editor.currentLayer;
+            activeGridHelper.position.z = (activeZ * CONFIG.CELL_HEIGHT) - (CONFIG.CELL_HEIGHT / 2);
+            windArrow.visible = false; // Hide wind arrow in playback (optional)
+
+            const fState = state.playback.fuelState;
+            const rState = state.playback.fireState;
+            // Use the playback terrain data
+            const terrainData = state.playback.terrain;
+
+            // --- PASS 1: UPDATE TERRAIN (Brown Underlayers) ---
+            let tIdx = 0;
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                    const h = terrainData[x]?.[y] || 0;
+
+                    if (h > 0) {
+                        // Scale Z to match height
+                        dummyTerrain.scale.set(1, 1, h);
+                        const zPos = (h * CONFIG.CELL_HEIGHT / 2) - (CONFIG.CELL_HEIGHT / 2);
+
+                        dummyTerrain.position.set(
+                            (x - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (y - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            zPos
+                        );
+                        dummyTerrain.rotation.set(0, 0, 0);
+                        dummyTerrain.updateMatrix();
+                        terrainMesh.setMatrixAt(tIdx, dummyTerrain.matrix);
+                    } else {
+                        dummyTerrain.scale.set(0, 0, 0);
+                        dummyTerrain.updateMatrix();
+                        terrainMesh.setMatrixAt(tIdx, dummyTerrain.matrix);
+                    }
+                    tIdx++;
+                }
+            }
+            terrainMesh.instanceMatrix.needsUpdate = true;
+
+            // --- PASS 2: UPDATE FUEL & FIRE ---
+            let idx = 0;
+            for (let z = 0; z < CONFIG.GRID_Z; z++) {
+                for (let x = 0; x < CONFIG.GRID_X; x++) {
+                    for (let y = 0; y < CONFIG.GRID_Y; y++) {
+
+                        // Get terrain height offset
+                        const terrainOffset = (terrainData[x]?.[y] || 0) * CONFIG.CELL_HEIGHT;
+
+                        dummy.position.set(
+                            (x - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (y - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (z * CONFIG.CELL_HEIGHT) + terrainOffset // <--- Apply Offset
+                        );
+                        dummy.rotation.set(0, 0, 0);
+
+                        const fuel = fState[x][y][z];
+                        const fire = rState[x]?.[y]?.[z] || 0;
+
+                        let visible = false;
+
+                        if (fire > 0.001) {
+                            visible = true;
+                            // Fire Color: Yellow/Red mix
+                            colorTemp.setHSL(0.05 + (fire * 0.1), 1.0, 0.5);
+                        }
+                        else if (fuel > 0) {
+                            visible = true;
+                            // Fuel Color: Green
+                            colorTemp.setHSL(0.3, 0.8, 0.1 + (fuel * 0.4));
+                        }
+
+                        // Culling: Hide if above active slider layer
+                        if (visible && z <= activeZ) {
+                            dummy.scale.set(1, 1, 1);
+                            gridMesh.setColorAt(idx, colorTemp);
+                        } else {
+                            dummy.scale.set(0, 0, 0);
+                        }
+                        dummy.updateMatrix();
+                        gridMesh.setMatrixAt(idx, dummy.matrix);
+                        idx++;
+                    }
+                }
+            }
+            gridMesh.instanceMatrix.needsUpdate = true;
+            gridMesh.instanceColor.needsUpdate = true;
+        }
+
+        // --- Playback Logic ---
+
+        function initPlaybackState() {
+            state.playback.fuelState = [];
+            state.playback.fireState = [];
+
+            // 1. Initialize Terrain for Playback
+            // If we loaded a file, it should already be in state.playback.terrain (handled in file loader)
+            // If NOT, we copy from the editor so you can preview the map.
+            if (!state.playback.data && state.editor.terrain.length > 0) {
+                state.playback.terrain = state.editor.terrain.map(row => [...row]);
+            } else if (!state.playback.terrain || state.playback.terrain.length === 0) {
+                // Fallback: flat terrain
+                state.playback.terrain = Array(CONFIG.GRID_X).fill().map(() => Array(CONFIG.GRID_Y).fill(0));
+            }
+
+            // 2. Initialize Arrays
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                state.playback.fuelState[x] = [];
+                state.playback.fireState[x] = [];
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                    state.playback.fuelState[x][y] = new Float32Array(CONFIG.GRID_Z).fill(0.0);
+                    state.playback.fireState[x][y] = new Float32Array(CONFIG.GRID_Z).fill(0.0);
+                }
+            }
+
+            // 3. Load Initial Fuel from JSON (if available)
+            if (state.playback.data && state.playback.data.initial_fuel) {
+                for (const pt of state.playback.data.initial_fuel) {
+                    const [x, y, z, val] = pt;
+                    if (x < CONFIG.GRID_X && y < CONFIG.GRID_Y && z < CONFIG.GRID_Z) {
+                        state.playback.fuelState[x][y][z] = val;
+                    }
+                }
+            } else {
+                // Fallback: Copy from Editor
+                for (let x = 0; x < CONFIG.GRID_X; x++) {
+                    for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                        state.playback.fuelState[x][y] = Float32Array.from(state.editor.fuel[x][y]);
+                    }
+                }
+            }
+
+            state.playback.currentStep = 0;
+            updatePlaybackUI();
+            updatePlaybackVisuals();
+        }
+
+        function applyFrameChanges(frameData) {
+            if (!frameData || !frameData.changes) return;
+            for (const change of frameData.changes) {
+                const [x, y, z, f, r] = change;
+                if (x < CONFIG.GRID_X && y < CONFIG.GRID_Y && z < CONFIG.GRID_Z) {
+                    state.playback.fuelState[x][y][z] = f;
+                    state.playback.fireState[x][y][z] = r;
+                }
+            }
+        }
+
+        function jumpToStep(targetStep) {
+            initPlaybackState();
+            const frames = state.playback.data.frames;
+            for (let i = 0; i < frames.length; i++) {
+                if (frames[i].step > targetStep) break;
+                applyFrameChanges(frames[i]);
+            }
+            state.playback.currentStep = targetStep;
+            updatePlaybackVisuals();
+            updatePlaybackUI();
+        }
+
+        function playNextFrame() {
+            const frames = state.playback.data.frames;
+            state.playback.currentStep++;
+
+            const frame = frames.find(f => f.step === state.playback.currentStep);
+
+            if (frame) {
+                applyFrameChanges(frame);
+                updatePlaybackVisuals();
+            }
+
+            if (state.playback.currentStep >= state.playback.totalSteps) {
+                state.playback.isPlaying = false;
+                togglePlayBtnUI();
+            }
+
+            updatePlaybackUI();
+        }
+
+        // --- Interaction Logic ---
+
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2();
+
+        function handleEditorInteraction(forcePaint = false) {
+            if (state.mode !== 'EDITOR') return;
+
+            raycaster.setFromCamera(pointer, camera);
+            const intersects = raycaster.intersectObject(interactionPlane);
+
+            if (intersects.length > 0) {
+                const point = intersects[0].point;
+                const cx = Math.floor((point.x + (CONFIG.GRID_X * CONFIG.CELL_SIZE) / 2) / CONFIG.CELL_SIZE);
+                const cy = Math.floor((point.y + (CONFIG.GRID_Y * CONFIG.CELL_SIZE) / 2) / CONFIG.CELL_SIZE);
+                const cz = state.editor.currentLayer;
+
+                if (cx >= 0 && cx < CONFIG.GRID_X && cy >= 0 && cy < CONFIG.GRID_Y) {
+                    document.getElementById('hover-status').innerText = `X:${cx} Y:${cy} Z:${cz}`;
+
+                    const isTreeTool = state.editor.tool.mode === 'tree';
+                    const isTerrainTool = state.editor.tool.mode === 'terrain';
+                    cursorMesh.visible = !isTreeTool;
+                    treeGhostMesh.visible = isTreeTool;
+
+                    // --- NEW: SCALE CURSOR FOR TERRAIN ---
+                    if (isTerrainTool) {
+                        // Scale cursor to match radius (Simple box visualizer)
+                        // A radius of 2 covers roughly 4 units across
+                        const scale = Math.max(1, state.editor.terrainRadius * 2 - 1);
+                        cursorMesh.scale.set(scale, scale, 1);
+                    } else {
+                        // Reset scale for other tools
+                        cursorMesh.scale.set(1, 1, 1);
+                    }
+
+                    if (isTreeTool) {
+                        // 1. Get Terrain Height at this cell (default to 0)
+                        const terrainH = state.editor.terrain[cx]?.[cy] || 0;
+
+                        // 2. Convert to World Z Units
+                        // We add the terrain height to the base position
+                        const worldZ = terrainH * CONFIG.CELL_HEIGHT;
+
+                        treeGhostMesh.position.set(
+                            (cx - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (cy - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            worldZ
+                        );
+                    } else {
+                        // For terrain brush, we want the cursor to hug the terrain, not float in the air
+                        const terrainZ = state.editor.terrain[cx]?.[cy] || 0;
+
+                        // If using Terrain tool, snap to current terrain height
+                        // If using Paint tool, snap to current Layer (Z) slider
+                        const targetZ = isTerrainTool ? terrainZ : cz;
+
+                        cursorMesh.position.set(
+                            (cx - CONFIG.GRID_X / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            (cy - CONFIG.GRID_Y / 2 + 0.5) * CONFIG.CELL_SIZE,
+                            targetZ * CONFIG.CELL_HEIGHT
+                        );
+                    }
+
+                    if (state.editor.isDrawing || forcePaint) {
+                        const cellIdx = cz * CONFIG.GRID_X * CONFIG.GRID_Y + cx * CONFIG.GRID_Y + cy;
+                        if (state.editor.tool.mode === 'tree' && !forcePaint) return;
+
+                        if (state.editor.lastPaintedIndex !== cellIdx || forcePaint) {
+                            applyTool(cx, cy, cz);
+                            updateEditorVisuals();
+                            state.editor.lastPaintedIndex = cellIdx;
+                        }
+                    }
+                    return;
+                }
+            }
+            cursorMesh.visible = false;
+            treeGhostMesh.visible = false;
+            document.getElementById('hover-status').innerText = "-";
+        }
+
+        function applyTool(cx, cy, cz) {
+            const tool = state.editor.tool;
+
+            if (tool.mode === 'fuel') {
+                state.editor.fuel[cx][cy][cz] = tool.value;
+            }
+            else if (tool.mode === 'ignition') {
+                const existsIdx = state.editor.ignition.findIndex(p => p.x === cx && p.y === cy && p.z === cz);
+                const shouldAdd = tool.value;
+                if (shouldAdd && existsIdx === -1) {
+                    state.editor.ignition.push({ x: cx, y: cy, z: cz });
+                } else if (!shouldAdd && existsIdx !== -1) {
+                    state.editor.ignition.splice(existsIdx, 1);
+                }
+            }
+            else if (tool.mode === 'tree') {
+                for (const v of currentTreeVoxels) {
+                    const tx = cx + v.x;
+                    const ty = cy + v.y;
+                    const tz = 0 + v.z;
+
+                    if (tx >= 0 && tx < CONFIG.GRID_X &&
+                        ty >= 0 && ty < CONFIG.GRID_Y &&
+                        tz >= 0 && tz < CONFIG.GRID_Z) {
+                        const existing = state.editor.fuel[tx][ty][tz];
+
+                        // Only paint if this tree voxel is denser than what's already there
+                        if (v.fuel > existing) {
+                            state.editor.fuel[tx][ty][tz] = v.fuel;
+                        }
+                    }
+                }
+            }
+            else if (tool.mode === 'terrain') {
+                const r = state.editor.terrainRadius;
+
+                // If radius is 1, just paint the single cell (fast path)
+                if (r === 1) {
+                    state.editor.terrain[cx][cy] = state.editor.terrainHeight;
+                } else {
+                    // Circle Painting Logic
+                    const rSq = r * r;
+                    // Loop over a bounding box around the cursor
+                    for (let dx = -r; dx <= r; dx++) {
+                        for (let dy = -r; dy <= r; dy++) {
+                            // Check if inside circle
+                            if (dx * dx + dy * dy <= rSq) {
+                                const tx = cx + dx;
+                                const ty = cy + dy;
+
+                                // Check grid boundaries
+                                if (tx >= 0 && tx < CONFIG.GRID_X && ty >= 0 && ty < CONFIG.GRID_Y) {
+                                    state.editor.terrain[tx][ty] = state.editor.terrainHeight;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function generateProceduralTerrain() {
+            const noise2D = createNoise2D(); // Initialize noise function
+
+            // Get values from UI
+            const scale = parseFloat(document.getElementById('inp-gen-scale').value); // How "zoomed out" the noise is
+            const maxHeight = parseFloat(document.getElementById('inp-gen-max').value);
+
+            // Random seed offset so every click is different
+            const seedX = Math.random() * 1000;
+            const seedY = Math.random() * 1000;
+
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+
+                    // FBM (Fractal Brownian Motion) - Stacking layers
+                    let elevation = 0;
+                    let amplitude = 1;
+                    let frequency = 1;
+                    let maxVal = 0; // Used to normalize later
+
+                    // 3 Layers of noise (Octaves)
+                    for (let i = 0; i < 3; i++) {
+                        const nx = (x + seedX) / scale * frequency;
+                        const ny = (y + seedY) / scale * frequency;
+
+                        // noise2D returns -1 to 1. We map it to 0 to 1.
+                        const val = (noise2D(nx, ny) + 1) / 2;
+
+                        elevation += val * amplitude;
+                        maxVal += amplitude;
+
+                        amplitude *= 0.5; // Next layer is smaller
+                        frequency *= 2.0; // Next layer is more detailed
+                    }
+
+                    // Normalize (0.0 to 1.0)
+                    elevation = elevation / maxVal;
+
+                    // Apply non-linear curve (makes valleys flatter and peaks sharper)
+                    elevation = Math.pow(elevation, 1.5);
+
+                    // Scale to desired height
+                    state.editor.terrain[x][y] = Math.floor(elevation * maxHeight);
+                }
+            }
+
+            updateEditorVisuals();
+        }
+
+        function clearTerrain() {
+            for (let x = 0; x < CONFIG.GRID_X; x++) {
+                for (let y = 0; y < CONFIG.GRID_Y; y++) {
+                    state.editor.terrain[x][y] = 0;
+                }
+            }
+            updateEditorVisuals();
+        }
+
+        function resizeGridSystem() {
+            const newX = parseInt(document.getElementById('inp-grid-x').value);
+            const newY = parseInt(document.getElementById('inp-grid-y').value);
+
+            if (newX < 10 || newY < 10) { alert("Grid too small!"); return; }
+            if (newX > 500 || newY > 500) { alert("Grid too large (Performance warning)"); }
+
+            // 1. BACKUP EXISTING DATA
+            const oldFuel = state.editor.fuel;
+            const oldTerrain = state.editor.terrain;
+            const oldX = CONFIG.GRID_X;
+            const oldY = CONFIG.GRID_Y;
+
+            // 2. UPDATE CONFIG
+            CONFIG.GRID_X = newX;
+            CONFIG.GRID_Y = newY;
+
+            // 3. CREATE NEW ARRAYS & PORT DATA
+            const newFuel = [];
+            const newTerrain = [];
+
+            for (let x = 0; x < newX; x++) {
+                newFuel[x] = [];
+                newTerrain[x] = [];
+                for (let y = 0; y < newY; y++) {
+                    // Init empty
+                    newFuel[x][y] = new Float32Array(CONFIG.GRID_Z).fill(0.0);
+                    newFuel[x][y][0] = 0.7; // Default grass
+                    newTerrain[x][y] = 0;
+
+                    // Copy data if within bounds of old grid
+                    if (x < oldX && y < oldY) {
+                        newFuel[x][y].set(oldFuel[x][y]); // Copy 3D column
+                        newTerrain[x][y] = oldTerrain[x][y]; // Copy height
+                    }
+                }
+            }
+
+            // 4. UPDATE STATE
+            state.editor.fuel = newFuel;
+            state.editor.terrain = newTerrain;
+
+            // Filter ignition points that are now out of bounds
+            state.editor.ignition = state.editor.ignition.filter(p => p.x < newX && p.y < newY);
+
+            // 5. REBUILD 3D SCENE
+            rebuildMeshes();
+
+            // 6. UPDATE VISUALS
+            updateEditorVisuals();
+
+            console.log(`Resized to ${newX}x${newY}`);
+        }
+
+        function rebuildMeshes() {
+            // A. Remove Old Meshes
+            scene.remove(gridMesh);
+            scene.remove(terrainMesh);
+            scene.remove(groundMesh);
+            scene.remove(activeGridHelper);
+            scene.remove(interactionPlane);
+
+            // B. Recreate Fuel Mesh (Instanced)
+            // We reuse geometry/material, just need new instance count
+            gridMesh = new THREE.InstancedMesh(geometry, material, CONFIG.GRID_X * CONFIG.GRID_Y * CONFIG.GRID_Z);
+            gridMesh.frustumCulled = false;
+            scene.add(gridMesh);
+
+            // C. Recreate Terrain Mesh (Instanced)
+            terrainMesh = new THREE.InstancedMesh(terrainGeo, terrainMat, CONFIG.GRID_X * CONFIG.GRID_Y);
+            terrainMesh.frustumCulled = false;
+            scene.add(terrainMesh);
+
+            // D. Update Helpers
+            // 1. Ground Plane (Brown floor)
+            const groundGeoNew = new THREE.PlaneGeometry(CONFIG.GRID_X * CONFIG.CELL_SIZE * 2, CONFIG.GRID_Y * CONFIG.CELL_SIZE * 2);
+            groundMesh = new THREE.Mesh(groundGeoNew, groundMat);
+            groundMesh.position.z = -CONFIG.CELL_HEIGHT / 2 - 0.1;
+            scene.add(groundMesh);
+
+            // 2. Grid Lines
+            activeGridHelper = new THREE.GridHelper(Math.max(CONFIG.GRID_X, CONFIG.GRID_Y) * CONFIG.CELL_SIZE, Math.max(CONFIG.GRID_X, CONFIG.GRID_Y), 0x444444, 0x222222);
+            activeGridHelper.rotation.x = Math.PI / 2;
+            scene.add(activeGridHelper);
+
+            // 3. Interaction Plane (Invisible raycast target)
+            const planeGeoNew = new THREE.PlaneGeometry(CONFIG.GRID_X * CONFIG.CELL_SIZE, CONFIG.GRID_Y * CONFIG.CELL_SIZE);
+            interactionPlane = new THREE.Mesh(planeGeoNew, planeMat);
+            scene.add(interactionPlane);
+        }
+
+        // --- Event Listeners ---
+
+        document.getElementById('file-input').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const json = JSON.parse(e.target.result);
+                    state.playback.data = json;
+
+                    // --- NEW: Load Terrain from JSON ---
+                    if (json.terrain) {
+                        state.playback.terrain = json.terrain;
+                    }
+
+                    if (json.metadata) state.playback.totalSteps = json.metadata.total_steps;
+                    document.getElementById('file-status').innerText = `Loaded: ${file.name} (${json.frames.length} keyframes)`;
+                    document.getElementById('file-status').classList.replace('text-gray-500', 'text-green-400');
+                    document.getElementById('playback-ui').classList.remove('opacity-50', 'pointer-events-none');
+                    document.getElementById('playback-slider').max = state.playback.totalSteps;
+                    initPlaybackState();
+                } catch (err) { alert("Error parsing JSON: " + err); }
+            };
+            reader.readAsText(file);
+        });
+
+        function switchMode(mode) {
+            state.mode = mode;
+            const editorDiv = document.getElementById('editor-controls');
+            const playbackDiv = document.getElementById('playback-controls');
+            const badge = document.getElementById('mode-badge');
+            const tabEd = document.getElementById('tab-editor');
+            const tabPl = document.getElementById('tab-playback');
+
+            if (mode === 'EDITOR') {
+                editorDiv.classList.remove('hidden');
+                playbackDiv.classList.add('hidden');
+                badge.innerText = "Editor Mode";
+                badge.className = "text-[10px] bg-blue-900 px-2 py-1 rounded uppercase font-bold tracking-wider";
+                tabEd.className = "flex-1 py-1 text-xs font-bold rounded bg-green-600 text-white transition-colors";
+                tabPl.className = "flex-1 py-1 text-xs font-bold rounded text-gray-400 hover:text-white transition-colors";
+                controls.enabled = false;
+                updateEditorVisuals();
+            } else {
+                editorDiv.classList.add('hidden');
+                playbackDiv.classList.remove('hidden');
+                badge.innerText = "Playback Mode";
+                badge.className = "text-[10px] bg-orange-900 px-2 py-1 rounded uppercase font-bold tracking-wider";
+                tabEd.className = "flex-1 py-1 text-xs font-bold rounded text-gray-400 hover:text-white transition-colors";
+                tabPl.className = "flex-1 py-1 text-xs font-bold rounded bg-orange-600 text-white transition-colors";
+                controls.enabled = true;
+                cursorMesh.visible = false;
+                treeGhostMesh.visible = false;
+                if (state.playback.data) jumpToStep(state.playback.currentStep);
+                else { initGridData(state.playback.fuelState); updatePlaybackVisuals(); }
+            }
+        }
+
+        document.getElementById('tab-editor').addEventListener('click', () => switchMode('EDITOR'));
+        document.getElementById('tab-playback').addEventListener('click', () => switchMode('PLAYBACK'));
+
+        // Grid Toggle Listener
+        document.getElementById('chk-grid').addEventListener('change', (e) => {
+            activeGridHelper.visible = e.target.checked;
+        });
+
+        document.getElementById('btn-resize').addEventListener('click', resizeGridSystem);
+
+        // Playback UI Logic
+        const slider = document.getElementById('playback-slider');
+        const btnPlay = document.getElementById('btn-play');
+        function togglePlayBtnUI() {
+            btnPlay.innerText = state.playback.isPlaying ? "⏸ Pause" : "▶ Play";
+            btnPlay.className = state.playback.isPlaying
+                ? "btn bg-yellow-600 hover:bg-yellow-500 rounded text-white p-2 font-bold"
+                : "btn bg-green-500 hover:bg-green-400 rounded text-white p-2 font-bold";
+        }
+        function updatePlaybackUI() {
+            slider.value = state.playback.currentStep;
+            document.getElementById('step-display').innerText = `Step: ${state.playback.currentStep} / ${state.playback.totalSteps}`;
+        }
+        btnPlay.addEventListener('click', () => { state.playback.isPlaying = !state.playback.isPlaying; togglePlayBtnUI(); });
+        slider.addEventListener('input', (e) => { state.playback.isPlaying = false; togglePlayBtnUI(); jumpToStep(parseInt(e.target.value)); });
+        document.getElementById('btn-next').addEventListener('click', () => { state.playback.isPlaying = false; togglePlayBtnUI(); playNextFrame(); });
+        document.getElementById('btn-prev').addEventListener('click', () => { state.playback.isPlaying = false; togglePlayBtnUI(); jumpToStep(Math.max(0, state.playback.currentStep - 10)); });
+        document.getElementById('inp-playback-speed').addEventListener('input', (e) => { state.playback.speedMultiplier = parseInt(e.target.value); document.getElementById('speed-val').innerText = state.playback.speedMultiplier + 'x'; });
+
+        // Input Handling
+        window.addEventListener('keydown', (e) => { if (e.key === 'Shift') { controls.enabled = true; document.body.style.cursor = 'move'; } });
+        window.addEventListener('keyup', (e) => { if (e.key === 'Shift' && state.mode === 'EDITOR') { controls.enabled = false; document.body.style.cursor = 'default'; } });
+
+        const canvas = renderer.domElement;
+        canvas.addEventListener('pointermove', (e) => {
+            pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+            pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            handleEditorInteraction(false);
+        });
+        canvas.addEventListener('pointerdown', (e) => {
+            if (state.mode !== 'EDITOR' || controls.enabled) return;
+            pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+            pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            if (e.button === 0) {
+                state.editor.isDrawing = true;
+                handleEditorInteraction(true);
+            }
+        });
+        window.addEventListener('pointerup', () => { state.editor.isDrawing = false; state.editor.lastPaintedIndex = -1; });
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Editor Bindings
+        ['speed', 'dir', 'moist'].forEach(id => {
+            document.getElementById('inp-' + id).addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                if (id === 'speed') state.editor.config.windSpeed = val;
+                if (id === 'dir') state.editor.config.windDir = val;
+                if (id === 'moist') state.editor.config.moisture = val;
+                document.getElementById('val-' + id).innerText = val + (id === 'dir' ? '°' : '');
+                if (state.mode === 'EDITOR') updateEditorVisuals();
+            });
+        });
+
+        document.getElementById('inp-layer').addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            state.editor.currentLayer = val;
+            document.getElementById('val-layer').innerText = val;
+            if (state.mode === 'EDITOR') updateEditorVisuals();
+            else updatePlaybackVisuals();
+        });
+
+        document.getElementById('inp-terrain-h').addEventListener('input', (e) => {
+            state.editor.terrainHeight = parseFloat(e.target.value);
+            document.getElementById('val-terrain-h').innerText = state.editor.terrainHeight;
+            // Update tool value if currently selected
+            if (state.editor.tool.mode === 'terrain') {
+                state.editor.tool.value = state.editor.terrainHeight;
+            }
+        });
+
+        document.getElementById('inp-terrain-r').addEventListener('input', (e) => {
+            state.editor.terrainRadius = parseInt(e.target.value);
+            document.getElementById('val-terrain-r').innerText = state.editor.terrainRadius;
+        });
+
+        // Tool Button Logic
+        function setActiveBtn(id, mode, val) {
+            ['btn-brush', 'btn-tree', 'btn-eraser', 'btn-ignite', 'btn-terrain'].forEach(b => {
+                const el = document.getElementById(b);
+                el.classList.remove('ring-2', 'ring-white', 'ring-offset-2', 'ring-offset-black');
+                el.style.borderColor = 'transparent';
+            });
+            const el = document.getElementById(id);
+            el.classList.add('ring-2', 'ring-white', 'ring-offset-2', 'ring-offset-black');
+            if (id === 'btn-ignite') el.style.borderColor = '#f97316';
+
+            state.editor.tool = { mode, value: val };
+
+            // Toggle Panels
+            document.getElementById('tree-builder-panel').classList.toggle('hidden', mode !== 'tree');
+            document.getElementById('terrain-panel').classList.toggle('hidden', mode !== 'terrain');
+
+            let txt = mode === 'fuel' ? 'Fuel Brush' : (mode === 'tree' ? 'Tree Tool' : (mode === 'ignition' ? 'Ignition' : 'Eraser'));
+            document.getElementById('tool-status').innerText = txt;
+        }
+
+        document.getElementById('btn-brush').addEventListener('click', () => setActiveBtn('btn-brush', 'fuel', 0.7));
+        document.getElementById('btn-eraser').addEventListener('click', () => setActiveBtn('btn-eraser', 'fuel', 0.0));
+        document.getElementById('btn-ignite').addEventListener('click', () => setActiveBtn('btn-ignite', 'ignition', true));
+        document.getElementById('btn-tree').addEventListener('click', () => setActiveBtn('btn-tree', 'tree', 0.7));
+        document.getElementById('btn-terrain').addEventListener('click', () => setActiveBtn('btn-terrain', 'terrain', state.editor.terrainHeight));
+
+        // Tree Config Bindings
+        ['tree-h', 'tree-r', 'tree-cr'].forEach(id => {
+            document.getElementById('inp-' + id).addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                if (id === 'tree-h') state.editor.treeConfig.height = val;
+                if (id === 'tree-r') state.editor.treeConfig.radius = val;
+                if (id === 'tree-cr') state.editor.treeConfig.crownRatio = val;
+                document.getElementById('val-' + id).innerText = val;
+                updateTreeGhostShape();
+            });
+        });
+        document.getElementById('tree-shape').addEventListener('change', (e) => {
+            state.editor.treeConfig.shape = e.target.value;
+            updateTreeGhostShape();
+        });
+
+        document.getElementById('btn-export').addEventListener('click', () => {
+            const fuelExport = state.editor.fuel.map(col => col.map(z => Array.from(z)));
+            const exportData = {
+                grid: { nx: CONFIG.GRID_X, ny: CONFIG.GRID_Y, nz: CONFIG.GRID_Z },
+                wind: state.editor.config,
+                ignition: state.editor.ignition,
+                fuel: fuelExport,
+                terrain: state.editor.terrain
+            };
+            const blob = new Blob([JSON.stringify(exportData)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = "sim_config.json";
+            link.click();
+        });
+
+        // Wire up the Generate Button
+        document.getElementById('btn-gen-terrain').addEventListener('click', generateProceduralTerrain);
+        document.getElementById('btn-clear-terrain').addEventListener('click', clearTerrain);
+
+        // Wire up the Sliders (Just for UI number updates)
+        document.getElementById('inp-gen-scale').addEventListener('input', (e) => {
+            document.getElementById('val-gen-scale').innerText = e.target.value;
+        });
+        document.getElementById('inp-gen-max').addEventListener('input', (e) => {
+            document.getElementById('val-gen-max').innerText = e.target.value;
+        });
+
+        // --- Loop ---
+        let lastTime = 0;
+        function animate(time) {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (state.mode === 'PLAYBACK' && state.playback.isPlaying) {
+                const interval = 100 / state.playback.speedMultiplier;
+                if (time - lastTime > interval) {
+                    playNextFrame();
+                    lastTime = time;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        updateEditorVisuals();
+        setActiveBtn('btn-brush', 'fuel', 0.7);
+        animate(0);
+
+    </script>
+</body>
+
+</html>

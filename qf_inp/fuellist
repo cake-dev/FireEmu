@@ -1,0 +1,38 @@
+&fuellist
+! ----------------------------------
+! FIRETEC domain info
+! ----------------------------------
+      nx = 322
+      ny = 343
+      nz = 38
+      dx = 2
+      dy = 2
+      dz = 1
+      aa1 = 1 
+      singlefuel = 1  
+      topofile = 'flat'  
+
+! ----------------------------------
+! Input dataset info
+! ----------------------------------
+      itrees = 2
+      treefile = 'final_treelist2.txt'
+      ndatax = 643
+      ndatay = 690
+
+! ----------------------------------
+! Litter and grass settings
+! ----------------------------------
+      ilitter = 1 
+      litterconstant = 5
+      lrho = 4.67
+      lmoisture = 0.1
+      lss = 0.0005
+      ldepth = 0.06
+      igrass = 1
+      ngrass = 1 
+      grassconstant = 5
+      grho = 1.0
+      gmoisture = 0.1
+      gss = 0.0005
+      gdepth = 0.3
