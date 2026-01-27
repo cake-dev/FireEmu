@@ -2,7 +2,6 @@ import argparse
 import os
 import shutil
 import numpy as np
-import world_gen
 from quicfire_io import QuicFireIO
 import run_gpu_qf as run_gpu
 
@@ -29,8 +28,9 @@ def main():
     qf_config['origin_y'] = origin_y
     
     nx, ny, nz = qf_config['nx'], qf_config['ny'], qf_config['nz_fire']
+    dz = qf_config.get('dz', 1.0) # Vertical cell size
     
-    print(f"Grid: {nx}x{ny}x{nz} | Origin: {origin_x}, {origin_y}")
+    print(f"Grid: {nx}x{ny}x{nz} | Origin: {origin_x}, {origin_y} | dz: {dz}")
     
     # 2. Read Wind Schedule
     print("Reading Wind Schedule...")
@@ -59,26 +59,61 @@ def main():
         print("Moisture file missing or empty. Using default 0.05.")
         fuel_moisture = None # Signal to use param default
         
-    # 4. Read Terrain (Optional)
-    # If using topo, QF often uses QU_TopoInputs.inp logic or binary files.
-    # For now, we generate flat or look for a specific file if needed. 
-    # Let's default to flat unless we implement full TopoInputs parser.
-    # User can supply custom_terrain array if they have a loader.
-    print("Generating default terrain (Flat)...")
-    terrain = np.zeros((nx, ny), dtype=np.float32)
+    # 4. Read Terrain
+    print("Reading Terrain Data...")
+    # Parse QU_TopoInputs.inp to find out if we need to load a custom file
+    topo_config = QuicFireIO.read_topo_inputs(os.path.join(args.input_dir, "QU_TopoInputs.inp"))
+    topo_flag = topo_config.get('topo_flag', 0)
     
-    # 5. Default Ignition (Center) if not using ignite.dat parser yet
-    ig_x, ig_y = nx // 2, ny // 2
-    # Find Z surface
-    ig_z = 0 # Flat
+    terrain_meters = np.zeros((nx, ny), dtype=np.float32)
     
+    if topo_flag == 5:
+        # Custom terrain file (e.g. usgs_dem.dat)
+        fname = topo_config.get('filename', 'usgs_dem.dat')
+        topo_path = os.path.join(args.input_dir, fname)
+        print(f"Loading custom terrain from: {fname}")
+        terrain_meters = QuicFireIO.read_topo_dat(topo_path, nx, ny)
+    elif topo_flag == 0:
+        print("Terrain flag is 0 (Flat). Using flat terrain.")
+    else:
+        print(f"Terrain flag {topo_flag} not fully supported in PyFire direct-load. Defaulting to flat.")
+
+    # PREPARE TERRAIN INDICES
+    # The solver calculates: elevation_meters = terrain_indices * dz
+    # So we must pass indices = meters / dz
+    terrain_indices = terrain_meters / dz
+
+    # 5. Handle Ignition
+    print("Reading Ignition Data...")
+    ignite_path = os.path.join(args.input_dir, "ignite.dat")
+    ignition_data = QuicFireIO.read_ignite_dat(ignite_path)
+
+    if ignition_data and ignition_data['type'] == 5:
+        print(f"Loaded ATV Ignition (Type 5) with {len(ignition_data['lines'])} lines.")
+        ig_payload = ignition_data
+        print(f"IG payload: {ig_payload}")
+        # add z offset to payload
+
+    else:
+        # Fallback to default center point
+        print("No valid ignite.dat or unknown type. Using default center ignition.")
+        ig_x, ig_y = int(nx // 2), int(ny // 2)
+        # Ignite at index 1 (just above surface)
+        ig_z = 1 
+        ig_list = [{'x': ig_x, 'y': ig_y, 'z': ig_z}]
+        # Expand simple list
+        for z_off in range(1, 10):
+            ig_list.append({'x': ig_x, 'y': ig_y, 'z': ig_z+z_off})
+        
+        ig_payload = ig_list
+
     # Payload
     sim_params_payload = {
         'wind_schedule': wind_schedule,
         'moisture': 0.05,
-        'ignition': [{'x': ig_x, 'y': ig_y, 'z': ig_z}],
+        'ignition': ig_payload,
         'custom_fuel': fuel_density,
-        'custom_terrain': terrain,
+        'custom_terrain': terrain_indices, # Passing indices is correct for run_gpu_qf logic
         'qf_config': qf_config
     }
     

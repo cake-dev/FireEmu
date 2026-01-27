@@ -19,7 +19,7 @@ CP_AIR = 1005.0  # J/(kg*K)
 T_AMBIENT = 300.0  # K
 
 # Fuel Properties
-CM = 1.0 
+CM = 1.0
 H_WOOD = 18.62e6 
 CP_WOOD = 1700.0 
 T_CRIT = 500.0 

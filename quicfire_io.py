@@ -63,8 +63,6 @@ class QuicFireIO:
             params['nz_fire'] = int(lines[12].split('!')[0].split()[0])
             
             # File Format Flags (Lines 18, 19)
-            # Line 18: fuel_file_type (1=all in one, 2=separate)
-            # Line 19: fuel_file_format (1=stream, 2=fortran records)
             if len(lines) > 19:
                 params['fuel_file_type'] = int(lines[18].split('!')[0].split()[0])
                 params['fuel_file_format'] = 2#int(lines[19].split('!')[0].split()[0])
@@ -76,6 +74,140 @@ class QuicFireIO:
             print(f"Warning parsing QUIC_fire.inp: {e}")
             
         return params
+
+    @staticmethod
+    def read_topo_inputs(filepath):
+        """
+        Parses QU_TopoInputs.inp to determine terrain type and filename.
+        Returns a dict with 'filename', 'topo_flag', etc.
+        """
+        if not os.path.exists(filepath):
+            print(f"Warning: {filepath} not found. Defaulting to flat.")
+            return {'topo_flag': 0, 'filename': ''}
+
+        params = {}
+        with open(filepath, 'r') as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+
+        try:
+            # Line 0: Header (skip)
+            # Line 1: Filename (quoted)
+            # Remove quotes if present
+            raw_fname = lines[1].split('!')[0].strip()
+            params['filename'] = raw_fname.replace('"', '').replace("'", "")
+            
+            # Line 2: Topo flag
+            # Format: 5 ! Comment
+            params['topo_flag'] = int(lines[2].split('!')[0].strip())
+            
+        except Exception as e:
+            print(f"Error parsing QU_TopoInputs.inp: {e}")
+            return {'topo_flag': 0, 'filename': ''}
+            
+        return params
+
+    @staticmethod
+    def read_topo_dat(filepath, nx, ny):
+        """
+        Reads binary topography file (e.g. usgs_dem.dat).
+        Assumes flat float32 binary of size nx * ny.
+        Returns numpy array (nx, ny).
+        """
+        if not os.path.exists(filepath):
+            print(f"Warning: Topo file {filepath} not found. Returning flat.")
+            return np.zeros((nx, ny), dtype=np.float32)
+            
+        try:
+            file_size = os.path.getsize(filepath)
+            expected_bytes = nx * ny * 4
+            
+            # Basic sanity check
+            if file_size != expected_bytes:
+                print(f"Warning: Topo file size {file_size} bytes does not match grid {nx}x{ny} ({expected_bytes} bytes).")
+                # Attempt to read anyway and reshape/truncate
+                
+            data = np.fromfile(filepath, dtype=np.float32)
+            
+            if data.size != nx * ny:
+                print(f"Resizing topo data from {data.size} to {nx*ny}")
+                if data.size > nx * ny:
+                    data = data[:nx*ny]
+                else:
+                    data = np.pad(data, (0, nx*ny - data.size), 'constant')
+            
+            # Reshape: Fortran order (x varies fastest, then y)
+            return data.reshape((nx, ny), order='F')
+            
+        except Exception as e:
+            print(f"Error reading topo file: {e}")
+            return np.zeros((nx, ny), dtype=np.float32)
+
+    @staticmethod
+    def read_ignite_dat(filepath):
+        """
+        Parses ignite.dat. Supports ATV ignition (Type 5).
+        Returns a dict: {'type': int, 'lines': []}
+        """
+        if not os.path.exists(filepath):
+            print(f"Warning: {filepath} not found. Returning None.")
+            return None
+            
+        ignition_data = {'type': 0, 'lines': []}
+        
+        with open(filepath, 'r') as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+        
+        try:
+            # Basic parsing state
+            reading_atv = False
+            
+            for line in lines:
+                # Check for ignition type
+                if "igntype=" in line.lower():
+                    # Handle spaces like igntype= 5 or igntype=5
+                    val = line.lower().split("igntype=")[1].split()[0]
+                    ignition_data['type'] = int(val)
+                
+                # Check for list start
+                if "&atvlist" in line.lower():
+                    reading_atv = True
+                    continue
+                
+                # Check for list end
+                if line.startswith("/"):
+                    reading_atv = True # Ensure we keep reading if data follows /
+                    continue
+                    
+                # Read data lines (ATV)
+                # Format: x_start y_start x_end y_end t_start t_end
+                if reading_atv:
+                    parts = line.split()
+                    # Filter out purely text/header lines (like natv=, targettemp=)
+                    if "=" in line:
+                        continue
+                        
+                    # ATV data lines usually have 6 floats
+                    if len(parts) >= 6:
+                        try:
+                            # Verify they are numbers
+                            vals = [float(p) for p in parts[:6]]
+                            ignition_data['lines'].append({
+                                'x_start': vals[0],
+                                'y_start': vals[1],
+                                'x_end': vals[2],
+                                'y_end': vals[3],
+                                't_start': vals[4],
+                                't_end': vals[5]
+                            })
+                        except ValueError:
+                            # Not a data line
+                            continue
+                            
+            return ignition_data
+
+        except Exception as e:
+            print(f"Error parsing ignite.dat: {e}")
+            return None
 
     @staticmethod
     def read_sensor1(filepath):
@@ -91,58 +223,29 @@ class QuicFireIO:
         with open(filepath, 'r') as f:
             lines = [l.strip() for l in f.readlines() if l.strip()]
         
-        # Format usually:
-        # Header
-        # ... setup lines ...
-        # Times:
-        # Time1
-        # Setup lines
-        # Z Speed Dir
-        
-        # Simplified parser looking for time blocks
-        # Assuming format described in PDF 3.9
-        # This parser relies on finding the wind speed/dir lines which are usually floats
-        
-        # A robust way is to scan for lines with 3 floats where the first is height
-        # and associate them with the preceding time.
-        
         current_time = 0
-        
         i = 0
         while i < len(lines):
             line = lines[i]
             parts = line.split()
             
-            # Check if this line is a Unix Timestamp (large integer)
-            # QF uses Unix Epoch. 
             if len(parts) == 1 and parts[0].isdigit() and int(parts[0]) > 1000000:
                 current_time = int(parts[0])
-                
-                # The wind data usually follows a few lines down.
-                # Skip site flag (1-4), roughness (float), etc.
-                # Usually 3 or 4 lines down.
-                # Let's scan forward 3-5 lines for the wind data
                 for offset in range(1, 10):
                     if i + offset >= len(lines): break
                     sub_parts = lines[i+offset].split()
-                    
-                    # Looking for: Height Speed Direction (3 floats)
                     if len(sub_parts) >= 3:
                         try:
-                            # Try converting first 3 to floats
                             h = float(sub_parts[0])
                             s = float(sub_parts[1])
                             d = float(sub_parts[2])
-                            
-                            # Heuristic: Height is usually reasonable (2-50), Speed (0-50), Dir (0-360)
                             if 0 <= s < 100 and 0 <= d <= 360:
                                 schedule.append((current_time, s, d))
-                                break # Found valid data for this time
+                                break 
                         except:
                             continue
             i += 1
             
-        # Normalize time to start at 0
         if schedule:
             start_time = schedule[0][0]
             schedule = [(t - start_time, s, d) for t, s, d in schedule]
@@ -160,75 +263,37 @@ class QuicFireIO:
             print(f"Warning: Fuel file {filepath} not found. Returning empty.")
             return np.zeros((nx, ny, nz), dtype=np.float32)
             
-        # Total expected elements. 
-        # Note: QF fuel files often contain multiple fuel types.
-        # Shape is usually (N_types, nx, ny, nz).
-        # We need to detect file size to infer N_types.
-        
         file_size = os.path.getsize(filepath)
         bytes_per_float = 4
         
         if file_format == 1: # Stream
             total_floats = file_size // bytes_per_float
             grid_size = nx * ny * nz
-            
-            if total_floats % grid_size != 0:
-                print(f"Warning: File size {file_size} does not match grid {nx}x{ny}x{nz}. Trying best guess.")
-                
             n_types = total_floats // grid_size
-            
             data = np.fromfile(filepath, dtype=np.float32)
             
-            # Reshape: Fortran (i, j, k, type) -> (x, y, z, type)
-            # Usually stored: x varies fastest, then y, then z.
             if n_types > 1:
-                # Assuming (n_types, x, y, z) or (x, y, z, n_types)? 
-                # QF PDF says: (ft%n_fuel_types, firegrid%nx, firegrid%ny, ft%n_grid_top)
-                # Fortran order: dim1 varies fastest.
-                # So in memory: Type, X, Y, Z
-                
+                # Fortran order: dim1 varies fastest -> Type, X, Y, Z
                 raw = data.reshape((n_types, nx, ny, nz), order='F')
-                
-                # Sum all fuel types for bulk density/moisture
                 combined = np.sum(raw, axis=0)
                 return combined
             else:
                 return data.reshape((nx, ny, nz), order='F')
                 
         elif file_format == 2: # Fortran Records
-            # This is harder because headers are interspersed.
-            # Usually [Header][Data][Header]
-            # We'll read the first record length to guess structure.
             with open(filepath, 'rb') as f:
                 header = struct.unpack('i', f.read(4))[0]
-                
-                # Check if header matches expected grid slice (nx*ny*4 bytes) or full grid
                 expected_full = nx * ny * nz * 4
-                expected_slice = nx * ny * 4
-                
-                f.seek(0)
                 
                 if header == expected_full:
-                    # One giant block per fuel type
-                    # Read block, skip footer, read next block...
-                    # Implementation simplified: read everything, skip headers manually
-                    raw_bytes = f.read()
-                    # Strip headers (4 bytes at start/end of each block)
-                    # This is tricky without knowing N_types. 
-                    # Assuming 1 type for now or parsing carefully.
-                    
-                    # For safety in this environment, fallback to reading payload of first block
                     f.seek(4)
                     data = np.fromfile(f, dtype=np.float32, count=nx*ny*nz)
                     return data.reshape((nx, ny, nz), order='F')
                 else:
                     print("Complex Fortran record structure detected. Reading raw stream as fallback.")
                     data = np.fromfile(filepath, dtype=np.float32)
-                    # Heuristic cleaning of headers? 
-                    # For now, just return zeros if complex to avoid crash
                     return np.zeros((nx, ny, nz), dtype=np.float32)
 
-    # ... (Keep write methods from previous turn) ...
     @staticmethod
     def read_raster_origin(project_dir):
         path = os.path.join(project_dir, 'rasterorigin.txt')
@@ -273,43 +338,3 @@ class QuicFireIO:
             QuicFireIO.write_fortran_block(f, [nz], 'i4')
             QuicFireIO.write_fortran_block(f, indices, 'i4')
         return np.array(indices)
-
-class QuicFireCSVWriter:
-    def __init__(self, nx, ny, dx, dy, origin_x, origin_y):
-        self.nx = nx
-        self.ny = ny
-        self.dx = dx
-        self.dy = dy
-        self.origin_x = origin_x
-        self.origin_y = origin_y
-        
-        if HAS_PYPROJ:
-            x_coords = origin_x + (np.arange(nx) + 0.5) * dx
-            y_coords = origin_y + (np.arange(ny) + 0.5) * dy
-            self.xx, self.yy = np.meshgrid(x_coords, y_coords)
-            transformer = Transformer.from_crs("epsg:5070", "epsg:4979", always_xy=True)
-            self.lon_grid, self.lat_grid = transformer.transform(self.xx, self.yy)
-        else:
-            self.lon_grid = np.zeros((ny, nx))
-            self.lat_grid = np.zeros((ny, nx))
-
-    def write_sparse_csv(self, data_array, filepath, header_val_name, zlevels=None):
-        nx, ny, nz = data_array.shape
-        z_indices = range(nz) if zlevels is None else zlevels
-        all_rows = []
-        for k in z_indices:
-            layer_data = data_array[:, :, k]
-            layer_data_T = layer_data.T 
-            nz_y, nz_x = np.nonzero(layer_data_T)
-            if len(nz_y) == 0: continue
-            vals = layer_data_T[nz_y, nz_x]
-            lons = self.lon_grid[nz_y, nz_x]
-            lats = self.lat_grid[nz_y, nz_x]
-            for i in range(len(vals)):
-                if abs(vals[i]) > 1e-6:
-                    all_rows.append(f"{nz_x[i]},{nz_y[i]},{lons[i]:.8f},{lats[i]:.8f},{k},{vals[i]:.6f}\n")
-        if not all_rows: return
-        header = f"IndexX,IndexY,Longitude,Latitude,ZLevel,{header_val_name}\n"
-        with open(filepath, 'w') as f:
-            f.write(header)
-            f.writelines(all_rows)
