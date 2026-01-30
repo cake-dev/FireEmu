@@ -110,7 +110,7 @@ class QuicFireIO:
     def read_topo_dat(filepath, nx, ny):
         """
         Reads binary topography file (e.g. usgs_dem.dat).
-        Assumes flat float32 binary of size nx * ny.
+        Handles both flat float32 binary and Fortran-record binary (8 byte overhead).
         Returns numpy array (nx, ny).
         """
         if not os.path.exists(filepath):
@@ -120,14 +120,30 @@ class QuicFireIO:
         try:
             file_size = os.path.getsize(filepath)
             expected_bytes = nx * ny * 4
+            data = None
             
-            # Basic sanity check
-            if file_size != expected_bytes:
-                print(f"Warning: Topo file size {file_size} bytes does not match grid {nx}x{ny} ({expected_bytes} bytes).")
-                # Attempt to read anyway and reshape/truncate
+            # 1. Check for Fortran Record (4 byte header + data + 4 byte footer)
+            if file_size == expected_bytes + 8:
+                try:
+                    with open(filepath, 'rb') as f:
+                        header = struct.unpack('i', f.read(4))[0]
+                        if header == expected_bytes:
+                            print(f"  Detected Fortran record format for {os.path.basename(filepath)}")
+                            data = np.fromfile(f, dtype=np.float32, count=nx*ny)
+                        else:
+                            # Not a valid header, reset
+                            f.seek(0)
+                except:
+                    pass
+
+            # 2. Check for Flat Binary
+            if data is None:
+                if file_size != expected_bytes:
+                    print(f"Warning: Topo file size {file_size} bytes does not match grid {nx}x{ny} ({expected_bytes} bytes). Attempting read...")
                 
-            data = np.fromfile(filepath, dtype=np.float32)
+                data = np.fromfile(filepath, dtype=np.float32)
             
+            # 3. Validation and Resizing
             if data.size != nx * ny:
                 print(f"Resizing topo data from {data.size} to {nx*ny}")
                 if data.size > nx * ny:
@@ -222,33 +238,20 @@ class QuicFireIO:
         schedule = []
         with open(filepath, 'r') as f:
             lines = [l.strip() for l in f.readlines() if l.strip()]
+
+        # print(lines)
         
-        current_time = 0
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            parts = line.split()
-            
-            if len(parts) == 1 and parts[0].isdigit() and int(parts[0]) > 1000000:
-                current_time = int(parts[0])
-                for offset in range(1, 10):
-                    if i + offset >= len(lines): break
-                    sub_parts = lines[i+offset].split()
-                    if len(sub_parts) >= 3:
-                        try:
-                            h = float(sub_parts[0])
-                            s = float(sub_parts[1])
-                            d = float(sub_parts[2])
-                            if 0 <= s < 100 and 0 <= d <= 360:
-                                schedule.append((current_time, s, d))
-                                break 
-                        except:
-                            continue
-            i += 1
-            
-        if schedule:
-            start_time = schedule[0][0]
-            schedule = [(t - start_time, s, d) for t, s, d in schedule]
+        # just grab the last line, looks like '6, 3.0, 225' where 1st is height, second speed, third dir
+        if len(lines) > 0:
+            last_line = lines[-1]
+            parts = last_line.replace(',', ' ').split()
+            if len(parts) >= 3:
+                try:
+                    s = float(parts[1])
+                    d = float(parts[2])
+                    schedule.append((0, s, d)) # time 0
+                except:
+                    pass
             
         return schedule
 

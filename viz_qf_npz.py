@@ -4,6 +4,7 @@ import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from mpl_toolkits.mplot3d import Axes3D
 import imageio.v3 as iio
 import os
 import argparse
@@ -36,40 +37,101 @@ def init_worker(fuel, rr, terrain, ros_map, arrival_indices):
     shared_data['ros_map'] = ros_map
     shared_data['arrival_indices'] = arrival_indices
 
-def load_data_npz(filepath):
-    """Loads QF-generated NPZ with full metadata support."""
-    if not os.path.exists(filepath):
-        print(f"Error: {filepath} not found.")
-        return None
+def init_3d_worker(terrain):
+    """Initialize data just for the 3D terrain worker."""
+    shared_data['terrain'] = terrain
 
-    print(f"Loading {filepath}...")
-    with np.load(filepath) as data:
-        # Core 3D Fields
-        fuel = data['fuel'] # Shape (T, NX, NY, NZ)
-        rr = data['reaction_rate']
-        
-        # Wind Fields (Optional)
-        if 'wind_local' in data:
-            wind_local = data['wind_local'] # Shape (T, Heights, 3, NX, NY)
-        else:
-            wind_local = None
+def load_data(path):
+    """
+    Loads QF-generated data. Supports:
+    1. Single .npz file (Legacy)
+    2. Single .h5 file (HDF5)
+    3. Directory containing split .npz files (Parallel Output)
+    """
+    fuel, rr, terrain, wind_local = None, None, None, None
+    w_spd, w_dir, moisture = 0.0, 0.0, 0.1
+    wind_heights = np.array([5.0])
+    
+    # --- CASE 1: HDF5 File ---
+    if path.endswith('.h5'):
+        print(f"Loading HDF5: {path}")
+        import h5py
+        with h5py.File(path, 'r') as f:
+            fuel = f['fuel'][:]
+            rr = f['reaction_rate'][:]
+            if 'wind_local' in f:
+                wind_local = f['wind_local'][:]
+            
+            if 'custom_terrain' in f:
+                terrain = f['custom_terrain'][:]
+            elif 'terrain' in f:
+                terrain = f['terrain'][:]
+                
+            w_spd = f.attrs.get('wind_speed', 0.0)
+            w_dir = f.attrs.get('wind_dir', 0.0)
+            moisture = f.attrs.get('moisture', 0.1)
+            
+            if 'wind_heights' in f:
+                wind_heights = f['wind_heights'][:]
 
-        # Terrain
-        if 'custom_terrain' in data:
-            terrain = data['custom_terrain']
-        elif 'terrain' in data:
-            terrain = data['terrain']
-        else:
-            terrain = np.zeros((fuel.shape[1], fuel.shape[2]))
-            
-        # Metadata / Scalars
-        w_spd = float(data['wind_speed'][0]) if 'wind_speed' in data else 0.0
-        w_dir = float(data['wind_dir'][0]) if 'wind_dir' in data else 0.0
-        moisture = float(data['moisture'][0]) if 'moisture' in data else 0.1
+        return fuel, rr, terrain, wind_local, (w_spd, w_dir, moisture), wind_heights
+
+    # --- CASE 2: Split NPZ (Directory or File in Directory) ---
+    search_dir = path if os.path.isdir(path) else os.path.dirname(path)
+    meta_path = os.path.join(search_dir, "outputs_meta.npz")
+    
+    if os.path.exists(meta_path):
+        print(f"Loading Split NPZ from: {search_dir}")
         
-        wind_heights = data['wind_heights'] if 'wind_heights' in data else np.array([5.0])
+        # Load heavy arrays
+        fuel = np.load(os.path.join(search_dir, "outputs_fuel.npz"))['fuel']
+        rr = np.load(os.path.join(search_dir, "outputs_rr.npz"))['reaction_rate']
+        
+        wind_path = os.path.join(search_dir, "outputs_wind.npz")
+        if os.path.exists(wind_path):
+            wind_local = np.load(wind_path)['wind_local']
             
-    return fuel, rr, terrain, wind_local, (w_spd, w_dir, moisture), wind_heights
+        # Load Metadata
+        with np.load(meta_path) as meta:
+            w_spd = float(meta['wind_speed'][0])
+            w_dir = float(meta['wind_dir'][0])
+            moisture = float(meta['moisture'][0])
+            
+            if 'custom_terrain' in meta:
+                terrain = meta['custom_terrain']
+            elif 'terrain' in meta:
+                terrain = meta['terrain']
+                
+            if 'wind_heights' in meta:
+                wind_heights = meta['wind_heights']
+                
+        return fuel, rr, terrain, wind_local, (w_spd, w_dir, moisture), wind_heights
+
+    # --- CASE 3: Single NPZ File (Legacy) ---
+    if path.endswith('.npz') and os.path.exists(path):
+        print(f"Loading Single NPZ: {path}")
+        with np.load(path) as data:
+            fuel = data['fuel']
+            rr = data['reaction_rate']
+            
+            if 'wind_local' in data:
+                wind_local = data['wind_local']
+                
+            if 'custom_terrain' in data:
+                terrain = data['custom_terrain']
+            elif 'terrain' in data:
+                terrain = data['terrain']
+                
+            w_spd = float(data['wind_speed'][0]) if 'wind_speed' in data else 0.0
+            w_dir = float(data['wind_dir'][0]) if 'wind_dir' in data else 0.0
+            moisture = float(data['moisture'][0]) if 'moisture' in data else 0.1
+            
+            wind_heights = data['wind_heights'] if 'wind_heights' in data else np.array([5.0])
+            
+        return fuel, rr, terrain, wind_local, (w_spd, w_dir, moisture), wind_heights
+
+    print(f"Error: Could not determine format or find files for {path}")
+    return None
 
 def calculate_ros_map(rr_vol):
     """Calculates ROS from Reaction Rate volume history."""
@@ -105,7 +167,7 @@ def calculate_ros_map(rr_vol):
 
 def render_worker(task_data):
     """
-    Worker function to render a single frame.
+    Worker function to render a single SIMULATION frame.
     """
     t = task_data['t']
     v_data = task_data['v_data']
@@ -129,7 +191,7 @@ def render_worker(task_data):
     
     # Projections
     top_fuel = np.max(f_t, axis=2) 
-    top_fire = np.sum(r_t, axis=2) # Integrate energy for visibility
+    top_fire = np.sum(r_t, axis=2) 
     side_fuel = np.max(f_t, axis=1)
     side_fire = np.max(r_t, axis=1)
     
@@ -139,7 +201,6 @@ def render_worker(task_data):
     
     # Flame Length
     column_rr_sum = np.sum(r_t, axis=2) 
-    # Approx kW/m2 -> Flame Length logic
     intensity_map = column_rr_sum * EFFECTIVE_H * DZ_DEFAULT 
     
     flame_length_map = np.zeros_like(intensity_map)
@@ -148,7 +209,6 @@ def render_worker(task_data):
     if np.any(active_fire_mask):
         flame_length_map[active_fire_mask] = DZ_DEFAULT + 0.0155 * np.power(intensity_map[active_fire_mask], 0.4)
     
-    # Unpack Wind Info
     w_spd, w_dir, moisture = wind_info
 
     # --- PLOTTING ---
@@ -157,7 +217,7 @@ def render_worker(task_data):
     gs = gridspec.GridSpec(2, 3, height_ratios=[1, 1], width_ratios=[1, 1, 1])
     
     ax1 = fig.add_subplot(gs[0, 0])      # Top Left
-    ax2 = fig.add_subplot(gs[0, 1:])     # Top Right (Spans 2)
+    ax2 = fig.add_subplot(gs[0, 1:])     # Top Right (Spans 2 columns - Restored)
     ax3 = fig.add_subplot(gs[1, 0])      # Bottom Left
     ax4 = fig.add_subplot(gs[1, 1])      # Bottom Middle
     ax5 = fig.add_subplot(gs[1, 2])      # Bottom Right
@@ -211,11 +271,9 @@ def render_worker(task_data):
     ax5.imshow(top_fuel.T, cmap='Greens', vmin=0, vmax=2.0, alpha=0.3, origin='lower', interpolation='nearest')
     ax5.set_facecolor('darkgray')
     
-    # Mask low velocity for clarity
     masked_w = np.ma.masked_where(np.abs(v_data) < 0.1, v_data)
     im5 = ax5.imshow(masked_w.T, cmap='coolwarm', origin='lower', vmin=-2.0, vmax=5.0, interpolation='nearest')
     
-    # Outline active fire
     ax5.contour(top_fire.T, levels=[0.05], colors='black', linewidths=0.8, alpha=0.5)
     plt.colorbar(im5, ax=ax5).set_label('W (m/s)')
     ax5.set_xlabel("X Distance")
@@ -229,52 +287,91 @@ def render_worker(task_data):
     
     return image_rgba[:, :, :3]
 
+def render_3d_frame(angle):
+    """
+    Worker function to render a single 3D TERRAIN frame.
+    """
+    terrain = shared_data['terrain']
+    
+    fig = plt.figure(figsize=(12, 12), dpi=80)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    nx, ny = terrain.shape
+    x = np.arange(nx) * DX_DEFAULT
+    y = np.arange(ny) * DY_DEFAULT
+    X, Y = np.meshgrid(x, y) # Meshgrid for plotting, note shape needs to match transpose usually
+    
+    # Note: X, Y shape (NY, NX) via meshgrid default, Terrain is (NX, NY)
+    # Transpose terrain to match meshgrid (X corresponds to cols, Y to rows)
+    surf = ax.plot_surface(X, Y, terrain.T, cmap='terrain', 
+                           linewidth=0, antialiased=False, shade=True)
+    
+    # Set camera angle
+    ax.view_init(elev=35, azim=angle)
+    
+    ax.set_title("3D Terrain Orbital View")
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Elevation (m)")
+    
+    # Ensure aspect ratio is reasonable
+    # Matplotlib 3D aspect ratio is tricky, usually set_box_aspect helps
+    try:
+        ax.set_box_aspect((np.ptp(x), np.ptp(y), np.ptp(terrain)*5)) # Exaggerate Z slightly
+    except:
+        pass # Older matplotlib might not support this
+
+    fig.tight_layout()
+    
+    fig.canvas.draw()
+    image_flat = np.frombuffer(fig.canvas.buffer_rgba(), dtype='uint8')
+    image_rgba = image_flat.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    plt.close(fig)
+    
+    return image_rgba[:, :, :3]
+
 def main():
-    parser = argparse.ArgumentParser(description="Visualize QUIC-Fire NPZ Outputs")
-    parser.add_argument("npz_file", type=str, help="Path to .npz file")
-    parser.add_argument("--output", type=str, default="viz_output.mp4", help="Output video path")
+    parser = argparse.ArgumentParser(description="Visualize QUIC-Fire Outputs")
+    parser.add_argument("input_path", type=str, help="Path to data")
+    parser.add_argument("--output", type=str, default="viz_output.mp4", help="Output sim video path")
+    parser.add_argument("--output_3d", type=str, default="terrain_orbit.mp4", help="Output 3D terrain video path")
     parser.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 1))
-    parser.add_argument("--height", type=float, default=5.0, help="Wind height level to visualize (default: 5.0m)")
-    parser.add_argument("--history", type=str, choices=['on', 'off'], default='on', help="Accumulate max vertical wind history")
+    parser.add_argument("--orbit", action='store_true', help="Generate 3D terrain orbital video in addition to sim viz")
+    parser.add_argument("--height", type=float, default=5.0)
+    parser.add_argument("--history", type=str, choices=['on', 'off'], default='on')
     
     args = parser.parse_args()
     
     # 1. Load Data
-    data = load_data_npz(args.npz_file)
+    data = load_data(args.input_path)
     if data is None: return
     fuel, rr, terrain, wind_local, wind_info, wind_heights = data
     
-    print(f"Data Loaded. Shape: {fuel.shape} | Wind Info: {wind_info}")
+    print(f"Data Loaded. Shape: {fuel.shape}")
     
-    # 2. Pre-calculate ROS
-    print("Calculating Metrics...")
+    # --- PHASE 1: STANDARD SIM VIZ ---
+    print("--- Phase 1: Simulation Visualization ---")
+    
+    # Pre-calc metrics
     arrival_indices, ros_map = calculate_ros_map(rr)
     
-    # 3. Pre-calculate Vertical Wind (Physics Pass)
-    print("Pre-calculating vertical wind history...")
-    num_frames = fuel.shape[0]
-    render_tasks = []
-    
-    # Find closest height index
+    # Pre-calc wind
     diffs = np.abs(wind_heights - args.height)
     h_idx = np.argmin(diffs)
     actual_h = wind_heights[h_idx]
-    print(f"Visualizing wind at height: {actual_h}m (Index {h_idx})")
     
     max_w_history = np.zeros((fuel.shape[1], fuel.shape[2]), dtype=np.float32)
     is_history = (args.history == 'on')
     v_title = f"Max Vert Velocity {'History' if is_history else ''} @ {actual_h}m"
-
-    for t in tqdm(range(num_frames), desc="Physics Calc"):
+    
+    render_tasks = []
+    num_frames = fuel.shape[0]
+    
+    print("Preparing physics frames...")
+    for t in range(num_frames):
         w_grid = np.zeros((fuel.shape[1], fuel.shape[2]), dtype=np.float32)
-        
-        # If wind data exists, extract W component (Index 2) at selected height
         if wind_local is not None:
-            # wind_local shape: (T, Heights, 3, NX, NY)
-            # We want [t, h_idx, 2, :, :]
             w_grid = wind_local[t, h_idx, 2, :, :].astype(np.float32)
-            
-            # Update history
             update_mask = np.abs(w_grid) > np.abs(max_w_history)
             max_w_history[update_mask] = w_grid[update_mask]
             
@@ -288,21 +385,32 @@ def main():
         }
         render_tasks.append(task)
     
-    # 4. Render
-    print(f"Rendering {num_frames} frames...")
     frames = []
-    
     with mp.Pool(processes=args.workers, initializer=init_worker, initargs=(fuel, rr, terrain, ros_map, arrival_indices)) as pool:
-        for frame in tqdm(pool.imap(render_worker, render_tasks), total=num_frames):
+        for frame in tqdm(pool.imap(render_worker, render_tasks), total=num_frames, desc="Rendering Sim"):
             if frame is not None:
                 frames.append(frame)
             
     if frames:
-        print(f"Saving to {args.output}...")
+        print(f"Saving Sim Video to {args.output}...")
         iio.imwrite(args.output, np.stack(frames), fps=10)
-        print("Done.")
-    else:
-        print("No frames rendered.")
+    
+    # --- PHASE 2: 3D ORBIT VIZ (Optional) ---
+    if args.orbit:
+        print("\n--- Phase 2: 3D Terrain Orbit ---")
+        angles = range(0, 360, 2) # 2 degree steps = 180 frames
+        
+        orbit_frames = []
+        # Re-use pool or create new one. Create new one to be clean with initializer
+        with mp.Pool(processes=args.workers, initializer=init_3d_worker, initargs=(terrain,)) as pool:
+            for frame in tqdm(pool.imap(render_3d_frame, angles), total=len(angles), desc="Rendering Orbit"):
+                if frame is not None:
+                    orbit_frames.append(frame)
+        
+        if orbit_frames:
+            print(f"Saving 3D Orbit Video to {args.output_3d}...")
+            iio.imwrite(args.output_3d, np.stack(orbit_frames), fps=30)
+            print("Orbit Done.")
 
 if __name__ == "__main__":
     main()
