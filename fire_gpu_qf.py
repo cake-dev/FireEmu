@@ -216,9 +216,10 @@ def transport_eps_kernel_v2(ep_counts,
             # =================================================================
             # PARTITION EPs BY SPREAD TYPE
             # =================================================================
-            # Key change: Much less creeping (5% instead of 30%)
+            # Key change: Much less creeping (creep% instead of 30%)
             # This prevents isotropic fill-in of interior
-            n_creeping = int(count * 0.05) # FIXME: tuning factor
+            creep_pct = 0.05# FIXME: tuning factor (probably correct though)
+            n_creeping = int(count * creep_pct) 
             n_wind = count - n_creeping
             
             # =================================================================
@@ -363,7 +364,7 @@ def transport_eps_kernel_v2(ep_counts,
             # CREEPING TRANSPORT (Very limited)
             # =================================================================
             if n_creeping > 0:
-                l_creep = dx * 0.8  # Shorter range than before
+                l_creep = dx * 0.8  # Shorter range than before (FIXME tuning (0.8 default))
                 
                 for _ in range(n_creeping):
                     theta = xoroshiro128p_uniform_float32(rng_states, rng_idx) * 2.0 * 3.14159
