@@ -3,13 +3,14 @@ import numpy as np
 import os
 import sys
 import time
+import plotly.graph_objects as go
 from quicfire_io import QuicFireIO
 
 # Import the realtime runner
 # Assumes qf_realtime_runner.py is in the same directory
 import qf_realtime_runner
 
-st.set_page_config(page_title="QUIC-Fire Realtime", layout="wide", page_icon="🔥")
+st.set_page_config(page_title="Py-Fire Realtime", layout="wide", page_icon="🔥")
 
 # --- Custom CSS for Dark Mode & Layout ---
 st.markdown("""
@@ -33,6 +34,10 @@ st.markdown("""
         font-size: 14px;
         color: #fafafa;
     }
+    /* Fix Plotly margins to align with image */
+    .stPlotlyChart {
+        height: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,7 +49,6 @@ def render_frame(fuel_3d, rr_3d):
     nx, ny, nz = fuel_3d.shape
     
     # 1. Fuel Map (Green/Earth tones)
-    # Sum fuel over Z or take max (depending on preference). 
     # Surface fuel (index 0) is usually most relevant for ground view.
     fuel_2d = fuel_3d[:, :, 0] 
     
@@ -56,12 +60,9 @@ def render_frame(fuel_3d, rr_3d):
     fire_2d = np.max(rr_3d, axis=2)
     
     # Normalize fire (reaction rates are small, e.g., 0.0 to 0.1)
-    # Using a non-linear scaling to make small fires visible
     fire_norm = np.clip(fire_2d * 20.0, 0, 1)
     
     # 3. Create RGB Buffer
-    # Shape: (nx, ny, 3)
-    # Background: Black
     img = np.zeros((nx, ny, 3), dtype=np.float32)
     
     # Fuel Channel (Greenish)
@@ -81,8 +82,147 @@ def render_frame(fuel_3d, rr_3d):
     
     return img
 
+def create_surface_trace(terrain, fuel_3d, rr_3d, dx, dy, dz, x_offset=0):
+    """
+    Helper function to generate a Plotly Surface trace.
+    Allows offsetting the X coordinates to place multiple surfaces in one scene.
+    """
+    # 1. Calculate Fuel Height (Canopy)
+    # Create Z-level array: [0, dz, 2dz, ...]
+    nz = fuel_3d.shape[2]
+    z_levels = np.arange(nz) * dz
+    
+    # Mask where fuel exists (threshold 0.1 kg/m3 to ignore thin grass/noise in height calc)
+    has_fuel = fuel_3d > 0.1
+    
+    # Find the maximum height index where fuel exists for each cell
+    fuel_height_map = np.max(has_fuel * z_levels[np.newaxis, np.newaxis, :], axis=2)
+    
+    # 2. Geometry: Terrain + Canopy
+    # Transpose for Plotly (y, x) expectation
+    z_data = (terrain + fuel_height_map).T
+    
+    # Calculate Coordinate Grids
+    ny_grid, nx_grid = z_data.shape
+    x_coords = np.arange(nx_grid) * dx + x_offset
+    y_coords = np.arange(ny_grid) * dy
+    
+    # 3. Color Calculation
+    fuel_load = np.sum(fuel_3d, axis=2).T
+    fire_intensity = np.max(rr_3d, axis=2).T
+    
+    # Composite Color Map
+    norm_fuel = np.clip(fuel_load / 2.0, 0, 1)
+    color_values = norm_fuel * 0.65  # Base vegetation range
+    
+    # Active fire override
+    mask_fire = fire_intensity > 0.001
+    color_values[mask_fire] = 0.8 + np.clip(fire_intensity[mask_fire]*10, 0, 0.2)
+    
+    # Custom Colorscale
+    colorscale = [
+        [0.0, 'rgb(30, 30, 30)'],    # Charcoal (Burnt/No Fuel)
+        [0.1, 'rgb(101, 67, 33)'],   # Dark Earth
+        [0.2, 'rgb(34, 139, 34)'],   # Forest Green
+        [0.7, 'rgb(124, 252, 0)'],   # Lawn Green
+        [0.8, 'rgb(255, 69, 0)'],    # Orange Red (Fire)
+        [1.0, 'rgb(255, 255, 0)']    # Yellow (Intense)
+    ]
+    
+    trace = go.Surface(
+        z=z_data,
+        x=x_coords,
+        y=y_coords,
+        surfacecolor=color_values,
+        colorscale=colorscale,
+        cmin=0, cmax=1.0,
+        showscale=False,
+        lighting=dict(ambient=0.4, diffuse=0.6, roughness=0.8, specular=0.1)
+    )
+    return trace
+
+def render_3d_single(terrain, fuel_3d, rr_3d, dx, dy, dz):
+    """
+    Renders a single 3D view.
+    """
+    trace = create_surface_trace(terrain, fuel_3d, rr_3d, dx, dy, dz, x_offset=0)
+    fig = go.Figure(data=[trace])
+    
+    fig.update_layout(
+        autosize=True,
+        height=500,
+        margin=dict(l=0, r=0, b=0, t=0),
+        scene=dict(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=True, title='Elev (m)'),
+            aspectmode='data',
+            bgcolor='#0e1117'
+        ),
+        paper_bgcolor='#0e1117',
+    )
+    return fig
+
+def render_3d_comparison_unified(terrain, fuel_init, rr_init, fuel_final, rr_final, dx, dy, dz):
+    """
+    Renders two 3D views side-by-side in the SAME scene.
+    This synchronizes camera controls perfectly.
+    """
+    # Calculate offset
+    nx = terrain.shape[0]
+    total_width_m = nx * dx
+    gap_m = total_width_m * 0.2 # 20% gap
+    offset_x = total_width_m + gap_m
+    
+    # Create traces
+    trace1 = create_surface_trace(terrain, fuel_init, rr_init, dx, dy, dz, x_offset=0)
+    trace2 = create_surface_trace(terrain, fuel_final, rr_final, dx, dy, dz, x_offset=offset_x)
+    
+    fig = go.Figure(data=[trace1, trace2])
+    
+    # Add Text Annotations to the scene
+    # We place them above the center of each terrain block
+    center_y = (terrain.shape[1] * dy) / 2
+    center_x1 = total_width_m / 2
+    center_x2 = offset_x + (total_width_m / 2)
+    max_z = np.max(terrain) * 1.5 + 20 # Float above terrain
+    
+    annotations = [
+        dict(
+            showarrow=False,
+            x=center_x1, y=center_y, z=max_z,
+            text="Initial State",
+            font=dict(color="white", size=16),
+            xanchor="center", yanchor="middle"
+        ),
+        dict(
+            showarrow=False,
+            x=center_x2, y=center_y, z=max_z,
+            text="Final Burn Scar",
+            font=dict(color="white", size=16),
+            xanchor="center", yanchor="middle"
+        )
+    ]
+    
+    fig.update_layout(
+        autosize=True,
+        height=500,
+        margin=dict(l=0, r=0, b=0, t=0),
+        scene=dict(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=True, title='Elev (m)'),
+            aspectmode='data',
+            bgcolor='#0e1117',
+            annotations=annotations
+        ),
+        paper_bgcolor='#0e1117',
+    )
+    
+    return fig
+
 def main():
-    st.sidebar.title("🔥 QUIC-Fire Live")
+    st.sidebar.title("🔥 Py-Fire Live")
     
     # --- Input Configuration ---
     input_dir = st.sidebar.text_input("Input Directory", value="qf_inp")
@@ -121,8 +261,17 @@ def main():
     with m3: p_fuel = st.empty()
     with m4: p_fire = st.empty()
     
-    # Main Image
-    image_display = st.empty()
+    # --- Dual View Columns ---
+    # Col 1: 2D Image, Col 2: 3D Interactive
+    view_c1, view_c2 = st.columns([1, 1])
+    
+    with view_c1:
+        st.markdown("**Top-Down View**")
+        image_display = st.empty()
+        
+    with view_c2:
+        st.markdown("**3D View**")
+        plotly_display = st.empty()
     
     if st.session_state.running:
         try:
@@ -132,11 +281,9 @@ def main():
             # =========================================================================
             # 1. PARSE GRID CONFIGURATION
             # =========================================================================
-            print("[1/6] Reading grid configuration...")
-            
             simparams_path = os.path.join(input_dir, "QU_simparams.inp")
             if not os.path.exists(simparams_path):
-                print(f"ERROR: Required file not found: {simparams_path}")
+                st.error("Missing QU_simparams.inp")
                 return 1
             
             sim_params = QuicFireIO.read_simparams(simparams_path)
@@ -145,7 +292,6 @@ def main():
             if os.path.exists(fire_params_path):
                 fire_params = QuicFireIO.read_quic_fire_inp(fire_params_path)
             else:
-                print("WARNING: QUIC_fire.inp not found. Using defaults.")
                 fire_params = {'sim_time': 300, 'dt': 1, 'out_int_fire': 10, 'nz_fire': 32}
             
             # Get georeferencing
@@ -156,7 +302,6 @@ def main():
             qf_config['origin_x'] = origin_x
             qf_config['origin_y'] = origin_y
             
-            # Use nz_fire if available, otherwise nz
             if 'nz_fire' in qf_config:
                 qf_config['nz'] = qf_config['nz_fire']
             
@@ -165,110 +310,64 @@ def main():
             dy = qf_config.get('dy', 2.0)
             dz = qf_config.get('dz', 1.0)
             
-            print(f"  Grid: {nx} x {ny} x {nz} cells")
-            print(f"  Cell size: {dx} x {dy} x {dz} m")
-            print(f"  Domain: {nx*dx} x {ny*dy} x {nz*dz} m")
-            print(f"  Origin: ({origin_x}, {origin_y})")
-            print(f"  Simulation time: {qf_config.get('sim_time', 300)} s")
-            print(f"  Time step: {qf_config.get('dt', 1)} s")
-
             # =========================================================================
             # 2. READ WIND SCHEDULE
             # =========================================================================
-            print("\n[2/6] Reading wind schedule...")
-            
             sensor_path = os.path.join(input_dir, "sensor1.inp")
             wind_schedule = QuicFireIO.read_sensor1(sensor_path)
-            
-            if wind_schedule:
-                print(f"  Loaded {len(wind_schedule)} wind setpoints")
-            else:
-                print("  No wind schedule found. Using default: 5 m/s from 225°")
+            if not wind_schedule:
                 wind_schedule = [(0, 5.0, 225.0)]
 
             # =========================================================================
             # 3. READ FUEL DATA
             # =========================================================================
-            print("\n[3/6] Reading fuel data...")
-            
             fuel_path = os.path.join(input_dir, "treesrhof.dat")
             file_format = qf_config.get('fuel_file_format', 1)
             
             if os.path.exists(fuel_path):
                 fuel_density = QuicFireIO.read_fuel_dat(fuel_path, nx, ny, nz, file_format)
-                fuel_cells = np.sum(fuel_density > 0)
-                print(f"  Loaded fuel density: {fuel_cells} cells with fuel")
-                print(f"  Fuel range: {np.min(fuel_density):.3f} - {np.max(fuel_density):.3f} kg/m³")
             else:
-                print(f"  WARNING: Fuel file not found: {fuel_path}")
-                print("  Creating default uniform fuel layer")
                 fuel_density = np.zeros((nx, ny, nz), dtype=np.float32)
-                fuel_density[:, :, 0:3] = 0.5  # 0.5 kg/m³ in bottom 3 layers
+                fuel_density[:, :, 0:3] = 0.5
             
-            # Moisture
             moist_path = os.path.join(input_dir, "treesmoist.dat")
-            fuel_moisture = None
             default_moisture = 0.05
-            
             if os.path.exists(moist_path):
                 fuel_moisture = QuicFireIO.read_fuel_dat(moist_path, nx, ny, nz, file_format)
-                if np.max(fuel_moisture) > 0:
-                    print(f"  Loaded fuel moisture: {np.mean(fuel_moisture[fuel_moisture > 0]):.2%} average")
-                else:
-                    print(f"  Moisture file empty. Using default: {default_moisture:.0%}")
-                    fuel_moisture = None
             else:
-                print(f"  No moisture file. Using default: {default_moisture:.0%}")
+                fuel_moisture = None
 
             # =========================================================================
             # 4. READ TERRAIN
             # =========================================================================
-            print("\n[4/6] Reading terrain data...")
-            
             topo_config = QuicFireIO.read_topo_inputs(
                 os.path.join(input_dir, "QU_TopoInputs.inp")
             )
             topo_flag = topo_config.get('topo_flag', 0)
-            
             terrain_meters = np.zeros((nx, ny), dtype=np.float32)
             
             if topo_flag == 5:
-                # Custom terrain file
                 fname = topo_config.get('filename', 'usgs_dem.dat')
                 topo_path = os.path.join(input_dir, fname)
-                print(f"  Loading terrain from: {fname}")
-                
                 if os.path.exists(topo_path):
                     terrain_meters = QuicFireIO.read_topo_dat(topo_path, nx, ny)
-                    print(f"  Terrain range: {np.min(terrain_meters):.1f} - {np.max(terrain_meters):.1f} m")
-                else:
-                    print(f"  WARNING: Terrain file not found: {topo_path}")
-                    print("  Using flat terrain")
-            elif topo_flag == 0:
-                print("  Terrain flag = 0: Flat terrain")
-            else:
-                print(f"  Terrain flag {topo_flag} not supported. Using flat terrain")
             
-            # Convert to grid indices
+            # Indices for sim, meters for viz
             terrain_indices = terrain_meters / dz
 
             # =========================================================================
             # 5. READ IGNITION DATA
             # =========================================================================
-            print("\n[5/6] Reading ignition data...")
-            
             ignite_path = os.path.join(input_dir, "ignite.dat")
             ignition_data = QuicFireIO.read_ignite_dat(ignite_path)
             
             if ignition_data and ignition_data.get('type') == 5:
-                n_lines = len(ignition_data.get('lines', []))
-                print(f"  ATV ignition (Type 5) with {n_lines} lines")
-                
                 ig_payload = ignition_data
             else:
-                print("  No valid ignite.dat. Using default center ignition")
-                ig_payload = setup_default_ignition(nx, ny, nz)
-                print(f"  Created {len(ig_payload)} ignition points at domain center")
+                try:
+                    ig_payload = setup_default_ignition(nx, ny, nz)
+                except:
+                    ig_payload = {'type': 1, 'x': nx//2, 'y': ny//2}
             
             # --- Prepare Payload ---
             sim_payload = {
@@ -280,14 +379,22 @@ def main():
                 'qf_config': qf_config
             }
             
+            # --- Render Static 3D View (Initial State) ---
+            # Shows initial fuel structure
+            initial_rr = np.zeros_like(fuel_density)
+            fig_initial = render_3d_single(terrain_meters, fuel_density, initial_rr, dx, dy, dz)
+            plotly_display.plotly_chart(fig_initial, width=600)
+
             # --- Run Iterator ---
             status_text.text("Simulation Running...")
             
-            # Initialize Generator
             sim_gen = qf_realtime_runner.simulation_iterator(sim_payload)
-            
-            # Loop
-            initial_fuel = np.sum(fuel_density)
+            initial_fuel_total = np.sum(fuel_density)
+            if initial_fuel_total == 0: initial_fuel_total = 1.0
+
+            # Store final state
+            final_fuel = None
+            final_rr = None
             
             for step_data in sim_gen:
                 if not st.session_state.running:
@@ -295,35 +402,46 @@ def main():
                     break
                 
                 step = step_data['step']
+                final_fuel = step_data['fuel']
+                final_rr = step_data['reaction_rate']
                 
                 # Update visuals every N steps
                 if step % speed_factor == 0:
-                    # Update Metrics
                     t = step_data['time']
                     ws = step_data['wind_speed']
                     wd = step_data['wind_dir']
                     
-                    # Calc stats
                     rr = step_data['reaction_rate']
                     active_cells = np.sum(rr > 0.0001)
-                    curr_fuel = np.sum(step_data['fuel'])
-                    consumed = (1 - (curr_fuel/initial_fuel)) * 100
+                    curr_fuel_total = np.sum(step_data['fuel'])
+                    consumed = (1 - (curr_fuel_total/initial_fuel_total)) * 100
                     
-                    # HTML Metrics
                     p_time.markdown(f"<div class='metric-card'><div class='metric-value'>{t:.1f}s</div><div class='metric-label'>Sim Time</div></div>", unsafe_allow_html=True)
                     p_wind.markdown(f"<div class='metric-card'><div class='metric-value'>{ws:.1f} m/s</div><div class='metric-label'>Wind {wd:.0f}°</div></div>", unsafe_allow_html=True)
                     p_fuel.markdown(f"<div class='metric-card'><div class='metric-value'>{consumed:.1f}%</div><div class='metric-label'>Fuel Burned</div></div>", unsafe_allow_html=True)
                     p_fire.markdown(f"<div class='metric-card'><div class='metric-value'>{active_cells}</div><div class='metric-label'>Active Cells</div></div>", unsafe_allow_html=True)
                     
-                    # Render Image
                     img = render_frame(step_data['fuel'], step_data['reaction_rate'])
                     image_display.image(img, caption=f"Top-Down View (Step {step})", clamp=True, width=600)
-                    
-            status_text.success("Simulation Complete.")
+            
+            # --- Final 3D Comparison ---
+            if final_fuel is not None:
+                status_text.success("Simulation Complete. Showing Synchronized Comparison...")
+                
+                # Use unified rendering (same scene, offset geometry) to lock controls
+                fig_compare = render_3d_comparison_unified(
+                    terrain_meters, 
+                    fuel_density, initial_rr, 
+                    final_fuel, final_rr, 
+                    dx, dy, dz
+                )
+                
+                plotly_display.plotly_chart(fig_compare, width=600, key="3d_end_compare_unified")
+            else:
+                status_text.success("Simulation Complete (No steps run).")
             
         except Exception as e:
             st.error(f"Simulation Error: {e}")
-            # Usually implies CUDA error or missing file
             import traceback
             st.code(traceback.format_exc())
 
